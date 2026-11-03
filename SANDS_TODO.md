@@ -178,6 +178,11 @@ Sands (форк Zed) на хосте
 - [ ] Сервисы через docker compose внутри песочницы; статус, логи, перезапуск.
 - [ ] Жизненный цикл: запуск, остановка, удаление, снимки (`sbx template save`).
 
+- [x] Форматы VS Code: `.vscode/tasks.json` (`dependsOn` с `dependsOrder`, `type: process`, блок
+      `linux`, все переменные VS Code, `inputs` со значением по умолчанию) и `.vscode/launch.json`
+      (`preLaunchTask` → задача сборки, типы отладчиков `cppdbg`/`gdb`/`lldb-dap`/`codelldb`/`python`).
+      Не поддержаны: `postDebugTask`, `compounds`, `inputs` без значения по умолчанию.
+
 ## Этап 4. Агенты проекта
 
 - [ ] Каталог агентов (Claude Code, Codex, Gemini, OpenCode, Copilot, Cursor): kit, ACP-адаптер,

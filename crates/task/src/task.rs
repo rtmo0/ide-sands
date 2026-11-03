@@ -407,6 +407,8 @@ type ZedEnvVariable = String;
 struct EnvVariableReplacer {
     variables: HashMap<VsCodeEnvVariable, ZedEnvVariable>,
     commands: HashMap<VsCodeCommand, ZedEnvVariable>,
+    /// Literal values for `${input:<id>}`, taken from the defaults in the file's `inputs`.
+    inputs: HashMap<String, String>,
 }
 
 impl EnvVariableReplacer {
@@ -414,7 +416,40 @@ impl EnvVariableReplacer {
         Self {
             variables,
             commands: HashMap::default(),
+            inputs: HashMap::default(),
         }
+    }
+
+    /// Maps the predefined variables of VS Code's `tasks.json` and `launch.json` to Sands task
+    /// variables. Sandboxes are Linux, so paths always use `/`.
+    fn vscode() -> Self {
+        let file_variables = [
+            ("workspaceFolder", VariableName::WorktreeRoot),
+            ("workspaceRoot", VariableName::WorktreeRoot),
+            ("fileWorkspaceFolder", VariableName::WorktreeRoot),
+            ("cwd", VariableName::WorktreeRoot),
+            ("file", VariableName::File),
+            ("relativeFile", VariableName::RelativeFile),
+            ("relativeFileDirname", VariableName::RelativeDir),
+            ("fileBasename", VariableName::Filename),
+            ("fileBasenameNoExtension", VariableName::Stem),
+            ("fileDirname", VariableName::Dirname),
+            ("lineNumber", VariableName::Row),
+            ("columnNumber", VariableName::Column),
+            ("selectedText", VariableName::SelectedText),
+        ];
+        Self::new(HashMap::from_iter(file_variables.into_iter().map(
+            |(vscode_name, variable)| (vscode_name.to_owned(), variable.to_string()),
+        )))
+        .with_commands(
+            ["pickProcess", "pickMyProcess"]
+                .map(|command| (command.to_owned(), VariableName::PickProcessId.to_string())),
+        )
+    }
+
+    fn with_inputs(mut self, inputs: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.inputs = inputs.into_iter().collect();
+        self
     }
 
     fn with_commands(
@@ -448,6 +483,10 @@ impl EnvVariableReplacer {
             if left == "env" && !right.is_empty() {
                 let variable_name = &right[1..];
                 return Some(format!("${{{variable_name}}}"));
+            } else if left == "input" && !right.is_empty() {
+                // Inputs without a default stay unresolved; callers skip definitions that still
+                // contain them, since Sands has no prompt for task inputs.
+                return self.inputs.get(&right[1..]).cloned();
             } else if left == "command" && !right.is_empty() {
                 let command_name = &right[1..];
                 if let Some(replacement_command) = self.commands.get(command_name) {

@@ -1,16 +1,48 @@
-use anyhow::bail;
-use collections::HashMap;
+use anyhow::{Context as _, bail};
+use collections::{HashMap, HashSet};
 use serde::Deserialize;
 use util::ResultExt;
 
 use crate::{EnvVariableReplacer, TaskTemplate, TaskTemplates, VariableName};
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct TaskOptions {
     cwd: Option<String>,
     #[serde(default)]
     env: HashMap<String, String>,
+}
+
+/// Platform-specific overrides (`"linux": { ... }`) of a task's command, arguments and options.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct PlatformOverrides {
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    options: Option<TaskOptions>,
+}
+
+/// An entry of the `inputs` array shared by `tasks.json` and `launch.json`.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VsCodeInput {
+    id: String,
+    #[serde(default)]
+    default: Option<serde_json::Value>,
+}
+
+/// Sands cannot prompt for inputs, so `${input:<id>}` resolves to the input's default value.
+pub(crate) fn input_defaults(inputs: &[VsCodeInput]) -> Vec<(String, String)> {
+    inputs
+        .iter()
+        .filter_map(|input| {
+            let default = match input.default.as_ref()? {
+                serde_json::Value::String(value) => value.clone(),
+                other => other.to_string(),
+            };
+            Some((input.id.clone(), default))
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -66,6 +98,11 @@ enum Command {
         #[serde(default)]
         args: Vec<String>,
     },
+    Process {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
     Gulp {
         task: String,
     },
@@ -75,7 +112,7 @@ fn generate_label(command: &Option<Command>) -> String {
     match command {
         Some(Command::Npm { script, .. }) => format!("npm: {}", script),
         Some(Command::Gulp { task }) => format!("gulp: {}", task),
-        Some(Command::Shell { command, .. }) => {
+        Some(Command::Shell { command, .. } | Command::Process { command, .. }) => {
             if command.trim().is_empty() {
                 "shell".to_string()
             } else {
@@ -86,25 +123,60 @@ fn generate_label(command: &Option<Command>) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DependsOrder {
+    Parallel,
+    Sequence,
+}
+
 impl VsCodeTaskDefinition {
-    fn into_zed_format(
-        self,
-        replacer: &EnvVariableReplacer,
-    ) -> anyhow::Result<Option<TaskTemplate>> {
-        if self.other_attributes.contains_key("dependsOn") {
-            log::warn!(
-                "Skipping deserializing of a task `{}` with the unsupported `dependsOn` key",
-                self.label
-            );
-            return Ok(None);
+    fn depends_on(&self) -> Vec<String> {
+        match self.other_attributes.get("dependsOn") {
+            Some(serde_json_lenient::Value::String(label)) => vec![label.clone()],
+            Some(serde_json_lenient::Value::Array(labels)) => labels
+                .iter()
+                .filter_map(|label| match label {
+                    serde_json_lenient::Value::String(label) => Some(label.clone()),
+                    // `{ "type": ..., "task": ... }` references tasks from other providers.
+                    serde_json_lenient::Value::Object(reference) => reference
+                        .get("task")
+                        .and_then(|task| task.as_str())
+                        .map(str::to_owned),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
         }
-        // `type` might not be set in e.g. tasks that use `dependsOn`; we still want to deserialize the whole object though (hence command is an Option),
-        // as that way we can provide more specific description of why deserialization failed.
-        // E.g. if the command is missing due to `dependsOn` presence, we can check other_attributes first before doing this (and provide nice error message)
-        // catch-all if on value.command presence.
-        let Some(command) = self.command else {
-            bail!("Missing `type` field in task");
+    }
+
+    fn depends_order(&self) -> DependsOrder {
+        match self.other_attributes.get("dependsOrder") {
+            Some(serde_json_lenient::Value::String(order)) if order == "sequence" => {
+                DependsOrder::Sequence
+            }
+            _ => DependsOrder::Parallel,
+        }
+    }
+
+    /// Sandboxes run Linux, so the `linux` block applies on every host.
+    fn linux_overrides(&self) -> anyhow::Result<PlatformOverrides> {
+        match self.other_attributes.get("linux") {
+            Some(value) => serde_json_lenient::from_value(value.clone())
+                .with_context(|| format!("invalid `linux` block in task `{}`", self.label)),
+            None => Ok(PlatformOverrides::default()),
+        }
+    }
+
+    /// Converts the task's own command, ignoring `dependsOn`. Tasks that only aggregate
+    /// dependencies have no command and convert to `None`.
+    fn own_template(&self, replacer: &EnvVariableReplacer) -> anyhow::Result<Option<TaskTemplate>> {
+        let Some(command) = self.command.clone() else {
+            if self.depends_on().is_empty() {
+                bail!("Missing `type` field in task `{}`", self.label);
+            }
+            return Ok(None);
         };
+        let overrides = self.linux_overrides()?;
 
         let (command, args, cwd) = match command {
             Command::Npm { script, path } => (
@@ -114,60 +186,178 @@ impl VsCodeTaskDefinition {
                     format!("{}/{}", VariableName::WorktreeRoot.template_value(), path)
                 }),
             ),
-            Command::Shell { command, args } => (command, args, None),
+            Command::Shell { command, args } | Command::Process { command, args } => (
+                overrides.command.unwrap_or(command),
+                overrides.args.unwrap_or(args),
+                None,
+            ),
             Command::Gulp { task } => ("gulp".to_owned(), vec![task], None),
         };
         // Per VSC docs, only `command`, `args` and `options` support variable substitution.
         let command = replacer.replace(&command);
-        let args = args.into_iter().map(|arg| replacer.replace(&arg)).collect();
+        let args: Vec<String> = args.into_iter().map(|arg| replacer.replace(&arg)).collect();
+        if std::iter::once(&command)
+            .chain(&args)
+            .any(|part| part.contains("${input:"))
+        {
+            bail!(
+                "task `{}` uses an input without a default value, which Sands cannot prompt for",
+                self.label
+            );
+        }
         let mut template = TaskTemplate {
-            label: self.label,
+            label: self.label.clone(),
             command,
             args,
             cwd: cwd.map(|cwd| replacer.replace(&cwd)),
             ..TaskTemplate::default()
         };
-        if let Some(options) = self.options {
+        for options in [self.options.clone(), overrides.options]
+            .into_iter()
+            .flatten()
+        {
             if let Some(cwd) = options.cwd {
                 template.cwd = Some(replacer.replace(&cwd));
             }
-            template.env = options.env;
+            template.env.extend(options.env);
         }
         Ok(Some(template))
     }
+}
+
+/// Converts tasks, turning `dependsOn` into one shell command that runs the dependencies (in
+/// parallel by default, like VS Code) and then the task itself.
+struct TaskConverter<'a> {
+    definitions: HashMap<&'a str, &'a VsCodeTaskDefinition>,
+    replacer: &'a EnvVariableReplacer,
+}
+
+impl TaskConverter<'_> {
+    fn convert(&self, definition: &VsCodeTaskDefinition) -> anyhow::Result<TaskTemplate> {
+        let mut visiting = HashSet::default();
+        let command = self.shell_command(definition, &mut visiting)?;
+        let own = definition.own_template(self.replacer)?;
+        if definition.depends_on().is_empty()
+            && let Some(own) = own
+        {
+            return Ok(own);
+        }
+        Ok(TaskTemplate {
+            label: definition.label.clone(),
+            command,
+            ..TaskTemplate::default()
+        })
+    }
+
+    fn shell_command(
+        &self,
+        definition: &VsCodeTaskDefinition,
+        visiting: &mut HashSet<String>,
+    ) -> anyhow::Result<String> {
+        if !visiting.insert(definition.label.clone()) {
+            bail!("task `{}` depends on itself", definition.label);
+        }
+        let dependencies = definition
+            .depends_on()
+            .iter()
+            .map(|label| {
+                let dependency = self.definitions.get(label.as_str()).with_context(|| {
+                    format!(
+                        "task `{}` depends on unknown task `{label}`",
+                        definition.label
+                    )
+                })?;
+                self.shell_command(dependency, visiting)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        visiting.remove(&definition.label);
+
+        let mut steps = Vec::new();
+        match definition.depends_order() {
+            DependsOrder::Sequence => steps.extend(dependencies),
+            DependsOrder::Parallel if dependencies.len() <= 1 => steps.extend(dependencies),
+            DependsOrder::Parallel => {
+                let started = dependencies
+                    .iter()
+                    .enumerate()
+                    .map(|(index, step)| format!("{step} & pid{index}=$!"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let waited = (0..dependencies.len())
+                    .map(|index| format!("wait $pid{index}"))
+                    .collect::<Vec<_>>()
+                    .join(" && ");
+                steps.push(format!("{{ {started}; {waited}; }}"));
+            }
+        }
+        if let Some(own) = definition.own_template(self.replacer)? {
+            steps.push(shell_step(&own));
+        }
+        Ok(steps.join(" && "))
+    }
+}
+
+/// One task as a subshell, so its `cd` and environment do not leak into the next step.
+fn shell_step(template: &TaskTemplate) -> String {
+    let mut step = String::from("(");
+    if let Some(cwd) = &template.cwd {
+        step.push_str(&format!("cd {} && ", quote_for_shell(cwd)));
+    }
+    let mut environment = template.env.iter().collect::<Vec<_>>();
+    environment.sort();
+    for (key, value) in environment {
+        step.push_str(&format!("{key}={} ", quote_for_shell(value)));
+    }
+    step.push_str(&template.command);
+    for arg in &template.args {
+        step.push(' ');
+        step.push_str(&quote_for_shell(arg));
+    }
+    step.push(')');
+    step
+}
+
+/// Double quotes keep `$VARIABLE` expansion working, which VS Code variables are converted to.
+fn quote_for_shell(value: &str) -> String {
+    if !value.is_empty()
+        && !value
+            .chars()
+            .any(|character| character.is_whitespace() || "\"'`;&|<>()".contains(character))
+    {
+        return value.to_owned();
+    }
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('`', "\\`");
+    format!("\"{escaped}\"")
 }
 
 /// [`VsCodeTaskFile`] is a superset of Code's task definition format.
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct VsCodeTaskFile {
     tasks: Vec<VsCodeTaskDefinition>,
+    #[serde(default)]
+    inputs: Vec<VsCodeInput>,
 }
 
 impl TryFrom<VsCodeTaskFile> for TaskTemplates {
     type Error = anyhow::Error;
 
     fn try_from(value: VsCodeTaskFile) -> Result<Self, Self::Error> {
-        let replacer = EnvVariableReplacer::new(HashMap::from_iter([
-            (
-                "workspaceFolder".to_owned(),
-                VariableName::WorktreeRoot.to_string(),
-            ),
-            ("file".to_owned(), VariableName::File.to_string()),
-            ("lineNumber".to_owned(), VariableName::Row.to_string()),
-            (
-                "selectedText".to_owned(),
-                VariableName::SelectedText.to_string(),
-            ),
-        ]));
+        let replacer = EnvVariableReplacer::vscode().with_inputs(input_defaults(&value.inputs));
+        let converter = TaskConverter {
+            definitions: value
+                .tasks
+                .iter()
+                .map(|definition| (definition.label.as_str(), definition))
+                .collect(),
+            replacer: &replacer,
+        };
         let templates = value
             .tasks
-            .into_iter()
-            .filter_map(|vscode_definition| {
-                vscode_definition
-                    .into_zed_format(&replacer)
-                    .log_err()
-                    .flatten()
-            })
+            .iter()
+            .filter_map(|definition| converter.convert(definition).log_err())
             .collect();
         Ok(Self(templates))
     }
@@ -406,6 +596,12 @@ mod tests {
                 ],
                 ..Default::default()
             },
+            // `dependsOn` tasks run their dependencies, in parallel by default.
+            TaskTemplate {
+                label: "Ignored task without type".to_string(),
+                command: "{ (cargo build --package rust-analyzer) & pid0=$!; (node ${ZED_WORKTREE_ROOT}/node_modules/typescript/lib/tsc.js --build ${ZED_WORKTREE_ROOT}/src --watch) & pid1=$!; wait $pid0 && wait $pid1; }".to_string(),
+                ..Default::default()
+            },
         ];
         let tasks: TaskTemplates = vscode_definitions.try_into().unwrap();
         assert_eq!(tasks.0, expected);
@@ -513,6 +709,16 @@ mod tests {
                 cwd: Some("$ZED_WORKTREE_ROOT/editors/code/".to_string()),
                 ..Default::default()
             },
+            TaskTemplate {
+                label: "Build Server and Extension".to_string(),
+                command: "{ (cargo build --package rust-analyzer) & pid0=$!; (cd $ZED_WORKTREE_ROOT/editors/code/ && npm run build) & pid1=$!; wait $pid0 && wait $pid1; }".to_string(),
+                ..Default::default()
+            },
+            TaskTemplate {
+                label: "Build Server (Release) and Extension".to_string(),
+                command: "{ (cargo build --release --package rust-analyzer) & pid0=$!; (cd $ZED_WORKTREE_ROOT/editors/code/ && npm run build) & pid1=$!; wait $pid0 && wait $pid1; }".to_string(),
+                ..Default::default()
+            },
         ];
         let tasks: TaskTemplates = vscode_definitions.try_into().unwrap();
         assert_eq!(tasks.0, expected);
@@ -575,5 +781,65 @@ mod tests {
             "shell"
         );
         assert_eq!(generate_label(&None), "Untitled Task");
+    }
+
+    #[test]
+    fn converts_depends_on_process_linux_and_inputs() {
+        let raw = r#"
+            {
+                "version": "2.0.0",
+                "inputs": [{ "id": "profile", "type": "pickString", "options": ["dev", "release"], "default": "release" }],
+                "tasks": [
+                    { "label": "fmt", "type": "process", "command": "cargo", "args": ["fmt"] },
+                    { "label": "lint", "type": "shell", "command": "cargo clippy", "options": { "cwd": "${workspaceFolder}/crates" } },
+                    {
+                        "label": "build",
+                        "type": "shell",
+                        "command": "cargo build --profile ${input:profile}",
+                        "linux": { "options": { "env": { "CC": "clang" } } },
+                        "dependsOn": ["fmt", "lint"],
+                        "dependsOrder": "sequence"
+                    },
+                    { "label": "checks", "dependsOn": ["fmt", "lint"] },
+                    { "label": "loop", "type": "shell", "command": "true", "dependsOn": "loop" }
+                ]
+            }
+        "#;
+        let parsed: VsCodeTaskFile = serde_json_lenient::from_str(raw).expect("parsing tasks.json");
+        let templates = TaskTemplates::try_from(parsed)
+            .expect("converting tasks.json")
+            .0;
+        let root = format!("${{{}}}", crate::VariableName::WorktreeRoot);
+        let commands = templates
+            .iter()
+            .map(|template| {
+                (
+                    template.label.as_str(),
+                    template.command.clone(),
+                    template.args.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        pretty_assertions::assert_eq!(
+            commands,
+            vec![
+                ("fmt", "cargo".to_string(), vec!["fmt".to_string()]),
+                ("lint", "cargo clippy".to_string(), vec![]),
+                (
+                    "build",
+                    format!(
+                        "(cargo fmt) && (cd {root}/crates && cargo clippy) && (CC=clang cargo build --profile release)"
+                    ),
+                    vec![],
+                ),
+                (
+                    "checks",
+                    format!(
+                        "{{ (cargo fmt) & pid0=$!; (cd {root}/crates && cargo clippy) & pid1=$!; wait $pid0 && wait $pid1; }}"
+                    ),
+                    vec![],
+                ),
+            ]
+        );
     }
 }

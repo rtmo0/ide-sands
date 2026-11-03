@@ -1,12 +1,11 @@
-use collections::HashMap;
 use serde::Deserialize;
 use util::ResultExt as _;
 
 use crate::{
-    DebugScenario, DebugTaskFile, EnvVariableReplacer, TcpArgumentsTemplate, VariableName,
+    BuildTaskDefinition, DebugScenario, DebugTaskFile, EnvVariableReplacer, TcpArgumentsTemplate,
+    vscode_format::{VsCodeInput, input_defaults},
 };
 
-// TODO support preLaunchTask linkage with other tasks
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct VsCodeDebugTaskDefinition {
@@ -14,6 +13,11 @@ struct VsCodeDebugTaskDefinition {
     name: String,
     #[serde(default)]
     port: Option<u16>,
+    /// Label of a task from `tasks.json` to run before the debug session starts.
+    #[serde(default)]
+    pre_launch_task: Option<String>,
+    #[serde(default)]
+    post_debug_task: Option<String>,
     #[serde(flatten)]
     other_attributes: serde_json::Value,
 }
@@ -21,8 +25,18 @@ struct VsCodeDebugTaskDefinition {
 impl VsCodeDebugTaskDefinition {
     fn try_to_zed(mut self, replacer: &EnvVariableReplacer) -> anyhow::Result<DebugScenario> {
         let label = replacer.replace(&self.name);
+        if let Some(post_debug_task) = &self.post_debug_task {
+            log::warn!(
+                "Ignoring `postDebugTask` `{post_debug_task}` of debug configuration `{label}`: not supported"
+            );
+        }
         let mut config = replacer.replace_value(self.other_attributes);
-        let adapter = task_type_to_adapter_name(&self.r#type);
+        if serde_json::to_string(&config).is_ok_and(|config| config.contains("${input:")) {
+            anyhow::bail!(
+                "debug configuration `{label}` uses an input without a default value, which Sands cannot prompt for"
+            );
+        }
+        let adapter = task_type_to_adapter_name(&self.r#type, &config);
         if let Some(config) = config.as_object_mut()
             && adapter == "JavaScript"
         {
@@ -33,7 +47,9 @@ impl VsCodeDebugTaskDefinition {
         }
         let definition = DebugScenario {
             label: label.into(),
-            build: None,
+            build: self
+                .pre_launch_task
+                .map(|task_label| BuildTaskDefinition::ByName(task_label.into())),
             adapter: adapter.into(),
             tcp_connection: self.port.map(|port| TcpArgumentsTemplate {
                 port: Some(port),
@@ -52,27 +68,15 @@ pub struct VsCodeDebugTaskFile {
     #[serde(default)]
     version: Option<String>,
     configurations: Vec<VsCodeDebugTaskDefinition>,
+    #[serde(default)]
+    inputs: Vec<VsCodeInput>,
 }
 
 impl TryFrom<VsCodeDebugTaskFile> for DebugTaskFile {
     type Error = anyhow::Error;
 
     fn try_from(file: VsCodeDebugTaskFile) -> Result<Self, Self::Error> {
-        let replacer = EnvVariableReplacer::new(HashMap::from_iter([
-            (
-                "workspaceFolder".to_owned(),
-                VariableName::WorktreeRoot.to_string(),
-            ),
-            (
-                "relativeFile".to_owned(),
-                VariableName::RelativeFile.to_string(),
-            ),
-            ("file".to_owned(), VariableName::File.to_string()),
-        ]))
-        .with_commands([(
-            "pickMyProcess".to_owned(),
-            VariableName::PickProcessId.to_string(),
-        )]);
+        let replacer = EnvVariableReplacer::vscode().with_inputs(input_defaults(&file.inputs));
         let templates = file
             .configurations
             .into_iter()
@@ -82,14 +86,20 @@ impl TryFrom<VsCodeDebugTaskFile> for DebugTaskFile {
     }
 }
 
-fn task_type_to_adapter_name(task_type: &str) -> String {
+/// Maps a VS Code debugger `type` to the Sands adapter that speaks the same configuration.
+fn task_type_to_adapter_name(task_type: &str, config: &serde_json::Value) -> String {
     match task_type {
         "pwa-node" | "node" | "node-terminal" | "chrome" | "pwa-chrome" | "edge" | "pwa-edge"
         | "msedge" | "pwa-msedge" => "JavaScript",
         "go" => "Delve",
         "php" => "Xdebug",
-        "cppdbg" | "lldb" => "CodeLLDB",
-        "debugpy" => "Debugpy",
+        // The C/C++ extension's `cppdbg` drives either GDB or LLDB through `MIMode`.
+        "cppdbg" if config.get("MIMode").and_then(|mode| mode.as_str()) == Some("lldb") => {
+            "CodeLLDB"
+        }
+        "cppdbg" | "gdb" => "GDB",
+        "lldb" | "lldb-dap" | "codelldb" => "CodeLLDB",
+        "debugpy" | "python" => "Debugpy",
         "rdbg" => "rdbg",
         _ => task_type,
     }
@@ -100,7 +110,7 @@ fn task_type_to_adapter_name(task_type: &str) -> String {
 mod tests {
     use serde_json::json;
 
-    use crate::{DebugScenario, DebugTaskFile, VariableName};
+    use crate::{BuildTaskDefinition, DebugScenario, DebugTaskFile, VariableName};
 
     use super::VsCodeDebugTaskFile;
 
@@ -181,7 +191,8 @@ mod tests {
             zed,
             DebugTaskFile(vec![DebugScenario {
                 label: "Attach to Process".into(),
-                adapter: "CodeLLDB".into(),
+                // `cppdbg` defaults to GDB on Linux, which is what sandboxes run.
+                adapter: "GDB".into(),
                 config: json!({
                     "request": "attach",
                     "processId": expected_placeholder,
@@ -189,6 +200,73 @@ mod tests {
                 tcp_connection: None,
                 build: None
             }])
+        );
+    }
+
+    #[test]
+    fn test_pre_launch_task_types_and_inputs() {
+        let raw = r#"
+            {
+                "version": "0.2.0",
+                "inputs": [
+                    { "id": "port", "type": "promptString", "default": "8080" },
+                    { "id": "target", "type": "promptString" }
+                ],
+                "configurations": [
+                    {
+                        "name": "Sands",
+                        "type": "lldb-dap",
+                        "request": "launch",
+                        "preLaunchTask": "Build Sands",
+                        "program": "${workspaceFolder}/target/debug/sands",
+                        "args": ["--port", "${input:port}", "${fileBasenameNoExtension}"]
+                    },
+                    {
+                        "name": "macOS LLDB",
+                        "type": "cppdbg",
+                        "request": "launch",
+                        "MIMode": "lldb",
+                        "program": "a.out"
+                    },
+                    {
+                        "name": "Needs a prompt",
+                        "type": "gdb",
+                        "request": "launch",
+                        "program": "${input:target}"
+                    }
+                ]
+            }
+        "#;
+        let parsed: VsCodeDebugTaskFile =
+            serde_json_lenient::from_str(raw).expect("deserializing launch.json");
+        let zed = DebugTaskFile::try_from(parsed).expect("converting to Zed debug templates");
+
+        pretty_assertions::assert_eq!(
+            zed,
+            DebugTaskFile(vec![
+                DebugScenario {
+                    label: "Sands".into(),
+                    adapter: "CodeLLDB".into(),
+                    config: json!({
+                        "request": "launch",
+                        "program": format!("${{{}}}/target/debug/sands", VariableName::WorktreeRoot),
+                        "args": ["--port", "8080", format!("${{{}}}", VariableName::Stem)],
+                    }),
+                    tcp_connection: None,
+                    build: Some(BuildTaskDefinition::ByName("Build Sands".into())),
+                },
+                DebugScenario {
+                    label: "macOS LLDB".into(),
+                    adapter: "CodeLLDB".into(),
+                    config: json!({
+                        "request": "launch",
+                        "MIMode": "lldb",
+                        "program": "a.out",
+                    }),
+                    tcp_connection: None,
+                    build: None,
+                },
+            ])
         );
     }
 }
