@@ -1,0 +1,81 @@
+# Sands CI. Upstream Zed workflows only run for zed-industries and need Namespace
+# runners, so the fork uses its own workflow on GitHub-hosted runners.
+name: Sands CI
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+jobs:
+  check_style:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      with:
+        persist-credentials: false
+    - name: Install toolchain from rust-toolchain.toml
+      run: rustup show
+    - name: cargo fmt
+      run: cargo fmt --all -- --check
+  check_macos:
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      with:
+        persist-credentials: false
+    - name: Install toolchain from rust-toolchain.toml
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+      with:
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: cargo check
+      run: cargo check --locked -p zed -p cli -p remote_server
+    - name: cargo test (branding-sensitive crates)
+      run: cargo test --locked -p paths -p release_channel
+  remote_server_linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: ubuntu-24.04
+          target: x86_64-unknown-linux-musl
+        - runner: ubuntu-24.04-arm
+          target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      with:
+        persist-credentials: false
+    - name: Install musl toolchain
+      run: sudo apt-get update && sudo apt-get install -y musl-tools
+    - name: Install Rust target
+      run: rustup show && rustup target add ${{ matrix.target }}
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ matrix.target }}
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Build remote server
+      env:
+        TARGET: ${{ matrix.target }}
+      run: |
+        export "CC_$(echo "$TARGET" | tr '-' '_')"=musl-gcc
+        cargo --config .cargo/bundle-config.toml build --locked --release --target "$TARGET" --package remote_server
+        gzip --stdout --best "target/$TARGET/release/remote-server" > "sands-remote-server-$TARGET.gz"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: sands-remote-server-${{ matrix.target }}
+        path: sands-remote-server-${{ matrix.target }}.gz
+        if-no-files-found: error
