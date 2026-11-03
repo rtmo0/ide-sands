@@ -650,7 +650,7 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
                 .size(IconSize::XSmall)
                 .color(Color::Muted),
         )
-        .name("Zed Agent")
+        .name("Sands Agent")
         .state(state_element)
         .disabled(is_trial || is_pro)
         .map(|this| {
