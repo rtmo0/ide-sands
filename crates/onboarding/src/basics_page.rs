@@ -498,7 +498,7 @@ fn render_registry_agent_button(
                 }
             });
             window.dispatch_action(
-                Box::new(zed_actions::agent::SelectAgent {
+                Box::new(sands_actions::agent::SelectAgent {
                     agent: agent_id.clone(),
                 }),
                 cx,
@@ -521,7 +521,7 @@ fn render_sands_agent_button() -> impl IntoElement {
                 .into_any_element(),
         )
         .on_click(|_, window, cx| {
-            window.dispatch_action(zed_actions::agent::OpenSettings.boxed_clone(), cx)
+            window.dispatch_action(sands_actions::agent::OpenSettings.boxed_clone(), cx)
         })
 }
 

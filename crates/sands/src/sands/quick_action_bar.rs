@@ -19,6 +19,7 @@ use project::{
     DisableAiSettings,
     project_settings::{DiagnosticSeverity, ProjectSettings},
 };
+use sands_actions::{agent::AddSelectionToThread, assistant::InlineAssist, outline::ToggleOutline};
 use search::{BufferSearchBar, buffer_search};
 use settings::{GitDiffBaseSetting, Settings, SettingsStore, update_settings_file};
 use ui::{
@@ -30,7 +31,6 @@ use workspace::item::ItemBufferKind;
 use workspace::{
     ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView, Workspace, item::ItemHandle,
 };
-use zed_actions::{agent::AddSelectionToThread, assistant::InlineAssist, outline::ToggleOutline};
 
 const MAX_CODE_ACTION_MENU_LINES: u32 = 16;
 

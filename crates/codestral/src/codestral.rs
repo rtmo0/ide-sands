@@ -48,7 +48,7 @@ pub fn codestral_api_key(cx: &App) -> Option<Arc<str>> {
 }
 
 pub fn load_codestral_api_key(cx: &mut App) -> Task<Result<(), AuthenticateError>> {
-    let credentials_provider = zed_credentials_provider::global(cx);
+    let credentials_provider = sands_credentials_provider::global(cx);
     let api_url = codestral_api_url(cx);
     codestral_api_key_state(cx).update(cx, |key_state, cx| {
         key_state.load_cached(api_url, |key_state| key_state, credentials_provider, cx)

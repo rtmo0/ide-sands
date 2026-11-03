@@ -12,6 +12,7 @@ use gpui::{
 };
 use picker::popover_menu::PickerPopoverMenu;
 use picker::{Picker, PickerDelegate};
+use sands_actions::agent::ToggleModelSelector;
 use settings::{AgentConfigOptionValue, SettingsStore};
 use ui::{
     ElevationIndex, IconButton, KeyBinding, ListItem, ListItemSpacing, PopoverMenuHandle, Switch,
@@ -19,7 +20,6 @@ use ui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 use util::ResultExt as _;
-use zed_actions::agent::ToggleModelSelector;
 
 use crate::model_search;
 use crate::ui::documentation_aside_side;

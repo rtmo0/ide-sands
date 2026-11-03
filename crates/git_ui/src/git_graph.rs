@@ -36,6 +36,10 @@ use project::{
         GraphDataResponse, Repository, RepositoryEvent, RepositoryId,
     },
 };
+use sands_actions::{
+    buffer_search,
+    search::{SelectNextMatch, SelectPreviousMatch, ToggleCaseSensitive},
+};
 use smallvec::{SmallVec, smallvec};
 use std::{
     cell::Cell,
@@ -45,10 +49,6 @@ use std::{
     time::{Duration, Instant},
 };
 use task::ResolvedTask;
-use zed_actions::{
-    buffer_search,
-    search::{SelectNextMatch, SelectPreviousMatch, ToggleCaseSensitive},
-};
 
 use theme::AccentColors;
 use time::{OffsetDateTime, UtcOffset, format_description::BorrowedFormatItem};

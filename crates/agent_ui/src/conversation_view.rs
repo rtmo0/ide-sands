@@ -50,6 +50,7 @@ use crate::message_editor::SessionCapabilities;
 use crate::{AgentThreadSource, DEFAULT_THREAD_TITLE, resolve_agent_image};
 use lru::LruCache;
 use rope::Point;
+use sands_actions::agent::{Chat, ToggleModelSelector};
 use settings::{NotifyWhenAgentWaiting, Settings as _, SettingsStore};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -75,7 +76,6 @@ use util::{
 use workspace::{
     CollaboratorId, MultiWorkspace, NewTerminal, PathList, Workspace, path_link::sanitize_path_text,
 };
-use zed_actions::agent::{Chat, ToggleModelSelector};
 
 use super::config_options::ConfigOptionsView;
 use super::entry_view_state::EntryViewState;
@@ -20046,7 +20046,7 @@ pub(crate) mod tests {
         cx.focus(&editor);
 
         editor.update_in(cx, |_editor, window, cx| {
-            window.dispatch_action(Box::new(zed_actions::editor::MoveUp), cx);
+            window.dispatch_action(Box::new(sands_actions::editor::MoveUp), cx);
         });
         cx.run_until_parked();
 
@@ -20064,7 +20064,7 @@ pub(crate) mod tests {
 
         // With a non-empty editor, another MoveUp must not consume the queue.
         editor.update_in(cx, |_editor, window, cx| {
-            window.dispatch_action(Box::new(zed_actions::editor::MoveUp), cx);
+            window.dispatch_action(Box::new(sands_actions::editor::MoveUp), cx);
         });
         cx.run_until_parked();
 

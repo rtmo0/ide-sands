@@ -21,6 +21,7 @@ use gpui::{
 use language::{Buffer, Capability, OffsetRangeExt, Point};
 use multi_buffer::PathKey;
 use project::{Project, ProjectItem, ProjectPath};
+use sands_actions::assistant::ToggleFocus;
 use settings::{Settings, SettingsStore};
 use std::{
     any::{Any, TypeId},
@@ -36,7 +37,6 @@ use workspace::{
     item::{ItemEvent, SaveOptions, TabContentParams, TabTooltipContent},
     searchable::SearchableItemHandle,
 };
-use zed_actions::assistant::ToggleFocus;
 
 pub struct AgentDiffPane {
     multibuffer: Entity<MultiBuffer>,

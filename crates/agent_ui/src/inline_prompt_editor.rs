@@ -17,6 +17,10 @@ use language_model::{LanguageModel, LanguageModelRegistry};
 use markdown::{HeadingLevelStyles, Markdown, MarkdownElement, MarkdownStyle};
 use parking_lot::Mutex;
 use project::Project;
+use sands_actions::{
+    agent::ToggleModelSelector,
+    editor::{MoveDown, MoveUp},
+};
 use settings::Settings;
 use std::cmp;
 use std::ops::Range;
@@ -28,10 +32,6 @@ use ui::{IconButtonShape, KeyBinding, PopoverMenuHandle, Tooltip, prelude::*};
 use uuid::Uuid;
 use workspace::notifications::NotificationId;
 use workspace::{Toast, Workspace};
-use zed_actions::{
-    agent::ToggleModelSelector,
-    editor::{MoveDown, MoveUp},
-};
 
 use crate::agent_model_selector::AgentModelSelector;
 use crate::buffer_codegen::{BufferCodegen, CodegenAlternative};
@@ -399,7 +399,7 @@ impl<T: 'static> PromptEditor<T> {
         };
 
         let agent_panel_keybinding =
-            ui::text_for_action(&zed_actions::assistant::ToggleFocus, window, cx)
+            ui::text_for_action(&sands_actions::assistant::ToggleFocus, window, cx)
                 .map(|keybinding| format!("{keybinding} to chat"))
                 .unwrap_or_default();
 

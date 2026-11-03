@@ -19,6 +19,7 @@ use language::{
 };
 use picker::{Picker, PickerDelegate};
 use project::{CallHierarchyItem, LspStoreEvent, Project};
+pub use sands_actions::{ShowIncomingCalls, ShowOutgoingCalls, ToggleDirection};
 use settings::Settings;
 use theme_settings::ThemeSettings;
 use ui::{
@@ -26,7 +27,6 @@ use ui::{
 };
 use util::{ResultExt, paths::PathExt};
 use workspace::{DismissDecision, ModalView, Workspace};
-pub use zed_actions::{ShowIncomingCalls, ShowOutgoingCalls, ToggleDirection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CallHierarchyMode {

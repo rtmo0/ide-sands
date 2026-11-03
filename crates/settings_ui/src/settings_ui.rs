@@ -43,14 +43,14 @@ use ui::{
     prelude::*,
 };
 
+use sands_actions::{
+    AGENT_SKILLS_SETTINGS_PATH, OpenProjectSettings, OpenSettings, OpenSettingsAt,
+    OpenSettingsAtTarget, OpenSettingsPage,
+};
 use util::{ResultExt as _, paths::PathStyle, rel_path::RelPath};
 use workspace::{
     AppState, MultiWorkspace, OpenOptions, OpenVisible, Workspace, WorkspaceSettings,
     client_side_decorations,
-};
-use zed_actions::{
-    AGENT_SKILLS_SETTINGS_PATH, OpenProjectSettings, OpenSettings, OpenSettingsAt,
-    OpenSettingsAtTarget, OpenSettingsPage,
 };
 
 use crate::components::{
@@ -456,10 +456,10 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &OpenSettings, cx| {
         open_settings_editor(None, None, None, cx);
     });
-    cx.on_action(|_: &zed_actions::assistant::OpenSkillCreator, cx| {
+    cx.on_action(|_: &sands_actions::assistant::OpenSkillCreator, cx| {
         open_skill_creator(pages::SkillCreatorOpenMode::Form, None, cx);
     });
-    cx.on_action(|_: &zed_actions::assistant::CreateSkillFromUrl, cx| {
+    cx.on_action(|_: &sands_actions::assistant::CreateSkillFromUrl, cx| {
         let initial_url = pages::skill_url_from_clipboard(cx);
         open_skill_creator(pages::SkillCreatorOpenMode::Url { initial_url }, None, cx);
     });
@@ -503,13 +503,13 @@ pub fn init(cx: &mut App) {
                 open_settings_editor(None, target_worktree_id, window_handle, cx);
             })
             .register_action(
-                |_, _: &zed_actions::assistant::OpenSkillCreator, window, cx| {
+                |_, _: &sands_actions::assistant::OpenSkillCreator, window, cx| {
                     let window_handle = window.window_handle().downcast::<MultiWorkspace>();
                     open_skill_creator(pages::SkillCreatorOpenMode::Form, window_handle, cx);
                 },
             )
             .register_action(
-                |_, _: &zed_actions::assistant::CreateSkillFromUrl, window, cx| {
+                |_, _: &sands_actions::assistant::CreateSkillFromUrl, window, cx| {
                     let window_handle = window.window_handle().downcast::<MultiWorkspace>();
                     let initial_url = pages::skill_url_from_clipboard(cx);
                     open_skill_creator(
@@ -7483,7 +7483,7 @@ pub mod test {
         // Dispatch the action the way the command palette does: on the
         // workspace window.
         multi_workspace.update_in(cx, |_multi_workspace, window, cx| {
-            window.dispatch_action(Box::new(zed_actions::assistant::OpenSkillCreator), cx);
+            window.dispatch_action(Box::new(sands_actions::assistant::OpenSkillCreator), cx);
         });
 
         cx.run_until_parked();

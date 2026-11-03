@@ -18,13 +18,13 @@ use project::{
     },
     worktree_store::WorktreeStore,
 };
+use sands_actions::{ToggleEnableBreakpoint, UnsetBreakpoint};
 use ui::{
     Divider, DividerColor, FluentBuilder as _, Indicator, IntoElement, ListItem, Render,
     ScrollAxes, StatefulInteractiveElement, Tooltip, WithScrollbar, prelude::*,
 };
 use util::paths::PathExt;
 use workspace::Workspace;
-use zed_actions::{ToggleEnableBreakpoint, UnsetBreakpoint};
 
 actions!(
     debugger,

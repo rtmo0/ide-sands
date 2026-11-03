@@ -14,6 +14,7 @@ use livekit_client::ConnectionQuality;
 use project::WorktreeSettings;
 use remote_connection::RemoteConnectionModal;
 use rpc::proto::{self};
+use sands_actions::ShowCallStats;
 use settings::{Settings as _, SettingsLocation};
 use theme::ActiveTheme;
 use ui::{
@@ -23,7 +24,6 @@ use ui::{
 };
 use util::rel_path::RelPath;
 use workspace::{ParticipantLocation, notifications::DetachAndPromptErr};
-use zed_actions::ShowCallStats;
 
 use crate::TitleBar;
 

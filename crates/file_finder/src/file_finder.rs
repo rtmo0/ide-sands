@@ -25,6 +25,7 @@ use project::{
     PathMatchCandidateSet, Project, ProjectPath, WorktreeId, worktree_store::WorktreeStore,
 };
 
+use sands_actions::search::ToggleIncludeIgnored;
 use settings::{ModalWidthContent, SeedQuerySetting, Settings, SettingsStore};
 use std::{
     borrow::Cow,
@@ -48,7 +49,6 @@ use workspace::{
     MAX_RECENT_SELECTIONS, ModalView, OpenChannelNotesById, OpenOptions, OpenVisible,
     SplitDirection, Workspace, item::PreviewTabsSettings, notifications::NotifyResultExt, pane,
 };
-use zed_actions::search::ToggleIncludeIgnored;
 
 actions!(
     file_finder,

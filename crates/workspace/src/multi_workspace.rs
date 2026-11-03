@@ -9,6 +9,7 @@ use gpui::{
 pub use project::ProjectGroupKey;
 use project::{DisableAiSettings, Project};
 use remote::RemoteConnectionOptions;
+use sands_actions::agents_sidebar::ToggleThreadSwitcher;
 use settings::Settings;
 pub use settings::SidebarSide;
 use std::cell::Cell;
@@ -17,7 +18,6 @@ use std::rc::Rc;
 use ui::prelude::*;
 use util::ResultExt;
 use util::path_list::PathList;
-use zed_actions::agents_sidebar::ToggleThreadSwitcher;
 
 use agent_settings::AgentSettings;
 use settings::SidebarDockPosition;

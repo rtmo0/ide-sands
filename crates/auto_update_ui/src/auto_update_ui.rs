@@ -8,6 +8,7 @@ use gpui::{
 use markdown_preview::markdown_preview_view::{MarkdownPreviewMode, MarkdownPreviewView};
 use project::DisableAiSettings;
 use release_channel::{AppVersion, ReleaseChannel};
+use sands_actions::ShowUpdateNotification;
 use semver::Version;
 use serde::Deserialize;
 use settings::Settings as _;
@@ -22,7 +23,6 @@ use workspace::{
     },
     workspace_error::{ErrorAction, ErrorSeverity, WorkspaceError},
 };
-use zed_actions::ShowUpdateNotification;
 
 actions!(
     auto_update,

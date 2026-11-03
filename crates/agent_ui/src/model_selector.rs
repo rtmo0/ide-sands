@@ -14,10 +14,10 @@ use gpui::{
 };
 use itertools::Itertools;
 use picker::{Picker, PickerDelegate};
+use sands_actions::agent::OpenSettings;
 use settings::SettingsStore;
 use ui::{DocumentationAside, IntoElement, prelude::*};
 use util::ResultExt;
-use zed_actions::agent::OpenSettings;
 
 use crate::model_search;
 use crate::ui::{

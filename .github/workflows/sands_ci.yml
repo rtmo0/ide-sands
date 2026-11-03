@@ -41,7 +41,7 @@ jobs:
       with:
         save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: cargo check
-      run: cargo check --locked -p zed -p cli -p remote_server
+      run: cargo check --locked -p sands -p cli -p remote_server
     - name: cargo test (branding-sensitive crates)
       run: cargo test --locked -p paths -p release_channel
   remote_server_linux:

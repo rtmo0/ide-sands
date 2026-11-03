@@ -1041,7 +1041,7 @@ impl EditPredictionStore {
             }
         });
 
-        let credentials_provider = zed_credentials_provider::global(cx);
+        let credentials_provider = sands_credentials_provider::global(cx);
 
         let this = Self {
             projects: HashMap::default(),
@@ -3643,7 +3643,7 @@ fn show_free_plan_edit_predictions_ended_notice_once(user_store: &Entity<UserSto
 pub fn init(cx: &mut App) {
     cx.observe_new(move |workspace: &mut Workspace, _, _cx| {
         workspace.register_action(
-            move |workspace, _: &zed_actions::OpenZedPredictOnboarding, window, cx| {
+            move |workspace, _: &sands_actions::OpenZedPredictOnboarding, window, cx| {
                 ZedPredictModal::toggle(
                     workspace,
                     workspace.user_store().clone(),

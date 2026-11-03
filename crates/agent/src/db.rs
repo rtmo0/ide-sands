@@ -10,6 +10,7 @@ use gpui::{BackgroundExecutor, Global, Task};
 use indoc::indoc;
 use language_model::Speed;
 use parking_lot::Mutex;
+use sands_env_vars::ZED_STATELESS;
 use serde::{Deserialize, Serialize};
 use sqlez::{
     bindable::{Bind, Column},
@@ -19,7 +20,6 @@ use sqlez::{
 use std::{io::ErrorKind, path::PathBuf, sync::Arc};
 use ui::{App, SharedString};
 use util::{ResultExt, path_list::PathList};
-use zed_env_vars::ZED_STATELESS;
 
 pub type DbMessage = crate::Message;
 pub type DbSummary = crate::legacy_thread::DetailedSummaryState;

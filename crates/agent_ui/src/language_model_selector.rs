@@ -13,9 +13,9 @@ use language_model::{
 };
 use ordered_float::OrderedFloat;
 use picker::{Picker, PickerDelegate};
+use sands_actions::agent::OpenSettings;
 use settings::Settings;
 use ui::prelude::*;
-use zed_actions::agent::OpenSettings;
 
 use crate::ui::{ModelSelectorFooter, ModelSelectorHeader, ModelSelectorListItem};
 

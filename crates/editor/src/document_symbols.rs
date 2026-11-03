@@ -381,12 +381,12 @@ mod tests {
     use lsp::LanguageServerId;
     use multi_buffer::{ExcerptRange, MultiBuffer, PathKey, ToPoint};
     use project::{lsp_store::TokenType, project_settings::DiagnosticSeverity};
+    use sands_actions::editor::MoveDown;
     use settings::{DocumentSymbols, SettingsStore};
     use text::Point;
     use theme::SyntaxTheme;
     use util::path;
     use workspace::item::{Item, ItemEvent};
-    use zed_actions::editor::MoveDown;
 
     use super::highlights_from_buffer;
     use crate::{

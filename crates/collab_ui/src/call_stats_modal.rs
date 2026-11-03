@@ -10,11 +10,11 @@ use gpui::{
 };
 use livekit_client::ConnectionQuality;
 use release_channel::{AppVersion, ReleaseChannel};
+use sands_actions::ShowCallStats;
 use serde::Serialize;
 use std::{cmp::Reverse, path::PathBuf};
 use ui::prelude::*;
 use workspace::{ModalView, Workspace};
-use zed_actions::ShowCallStats;
 
 const WEBRTC_AUDIO_SAMPLES_PER_MILLISECOND: f64 = 48.0;
 const PLAYBACK_FRAME_DURATION_MILLISECONDS: u64 = 10;

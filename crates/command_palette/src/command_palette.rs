@@ -25,13 +25,13 @@ use persistence::CommandPaletteDB;
 use picker::Direction;
 use picker::{Picker, PickerDelegate};
 use postage::{sink::Sink, stream::Stream};
+use sands_actions::{OpenZedUrl, command_palette::Toggle};
 use settings::Settings;
 use ui::{
     ButtonLike, HighlightedLabel, KeyBinding, ListItem, ListItemSpacing, Tooltip, prelude::*,
 };
 use util::ResultExt;
 use workspace::{ModalView, Workspace, WorkspaceSettings};
-use zed_actions::{OpenZedUrl, command_palette::Toggle};
 
 actions!(command_palette, [RemoveSelected]);
 
@@ -720,7 +720,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                 return;
             };
             let action_name = selected_command.action.name();
-            let open_keymap = Box::new(zed_actions::ChangeKeybinding {
+            let open_keymap = Box::new(sands_actions::ChangeKeybinding {
                 action: action_name.to_string(),
             });
             window.dispatch_action(open_keymap, cx);

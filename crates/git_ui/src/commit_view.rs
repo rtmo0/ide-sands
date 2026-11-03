@@ -1470,13 +1470,13 @@ impl Render for CommitViewToolbar {
                     .tooltip(move |_, cx| {
                         Tooltip::for_action(
                             "Buffer Search",
-                            &zed_actions::buffer_search::Deploy::find(),
+                            &sands_actions::buffer_search::Deploy::find(),
                             cx,
                         )
                     })
                     .on_click(|_, window, cx| {
                         window.dispatch_action(
-                            Box::new(zed_actions::buffer_search::Deploy::find()),
+                            Box::new(sands_actions::buffer_search::Deploy::find()),
                             cx,
                         );
                     }),

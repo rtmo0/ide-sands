@@ -9,11 +9,11 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use session::DebugSession;
 
+use sands_actions::debug_panel::{Toggle, ToggleFocus};
 use tasks_ui::{Spawn, TaskOverrides};
 use ui::{FluentBuilder, InteractiveElement};
 use util::maybe;
 use workspace::{ShutdownDebugAdapters, Workspace};
-use zed_actions::debug_panel::{Toggle, ToggleFocus};
 
 pub mod attach_modal;
 pub mod debugger_panel;

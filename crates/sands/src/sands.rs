@@ -98,6 +98,10 @@ use uuid::Uuid;
 use vim_mode_setting::VimModeSetting;
 use workspace::notifications::{NotificationId, dismiss_app_notification, show_app_notification};
 
+use sands_actions::{
+    About, GetMerch, OpenAccountSettings, OpenBrowser, OpenDocs, OpenProjectTasks,
+    OpenServerSettings, OpenSettingsFile, OpenStatusPage, OpenZedUrl, Quit,
+};
 use workspace::{
     AppState, MultiWorkspace, NewFile, NewWindow, OpenLog, Panel, Toast, Workspace,
     WorkspaceSettings, create_and_open_local_file,
@@ -105,10 +109,6 @@ use workspace::{
 };
 use workspace::{CloseProject, CloseWindow, RestoreBanner, with_active_or_new_workspace};
 use workspace::{Pane, notifications::DetachAndPromptErr};
-use zed_actions::{
-    About, GetMerch, OpenAccountSettings, OpenBrowser, OpenDocs, OpenProjectTasks,
-    OpenServerSettings, OpenSettingsFile, OpenStatusPage, OpenZedUrl, Quit,
-};
 
 const DOCS_URL: &str = "https://zed.dev/docs/";
 const STATUS_URL: &str = "https://status.zed.dev";
@@ -235,7 +235,7 @@ pub fn init(cx: &mut App) {
         });
     }
 
-    cx.on_action(|_: &zed_actions::OpenLicenses, cx| {
+    cx.on_action(|_: &sands_actions::OpenLicenses, cx| {
         with_active_or_new_workspace(cx, |workspace, window, cx| {
             open_bundled_file(
                 workspace,
@@ -247,7 +247,7 @@ pub fn init(cx: &mut App) {
             );
         });
     })
-    .on_action(|&zed_actions::OpenKeymapFile, cx| {
+    .on_action(|&sands_actions::OpenKeymapFile, cx| {
         with_active_or_new_workspace(cx, |_, window, cx| {
             open_settings_file(
                 paths::keymap_file(),
@@ -316,7 +316,7 @@ pub fn init(cx: &mut App) {
             );
         });
     })
-    .on_action(|_: &zed_actions::OpenDefaultKeymap, cx| {
+    .on_action(|_: &sands_actions::OpenDefaultKeymap, cx| {
         with_active_or_new_workspace(cx, |workspace, window, cx| {
             open_bundled_file(
                 workspace,
@@ -1037,11 +1037,11 @@ fn register_actions(
                 window.toggle_fullscreen();
             }
         })
-        .register_action(|_, _: &zed_actions::dev::ToggleFpsOverlay, window, _| {
+        .register_action(|_, _: &sands_actions::dev::ToggleFpsOverlay, window, _| {
             window.cycle_debug_frame_overlay_mode();
         })
         .register_action(
-            |_, _: &zed_actions::dev::ResetFrameOverlayStats, window, _| {
+            |_, _: &sands_actions::dev::ResetFrameOverlayStats, window, _| {
                 window.reset_debug_frame_overlay_stats();
             },
         )
@@ -1111,7 +1111,7 @@ fn register_actions(
                 cx,
             );
         })
-        .register_action(|workspace, action: &zed_actions::OpenRemote, window, cx| {
+        .register_action(|workspace, action: &sands_actions::OpenRemote, window, cx| {
             if !action.from_existing_connection {
                 cx.propagate();
                 return;
@@ -1161,7 +1161,7 @@ fn register_actions(
         })
         .register_action({
             let fs = app_state.fs.clone();
-            move |_, action: &zed_actions::IncreaseUiFontSize, _window, cx| {
+            move |_, action: &sands_actions::IncreaseUiFontSize, _window, cx| {
                 if action.persist {
                     update_settings_file(fs.clone(), cx, move |settings, cx| {
                         let ui_font_size = ThemeSettings::get_global(cx).ui_font_size(cx) + px(1.0);
@@ -1177,7 +1177,7 @@ fn register_actions(
         })
         .register_action({
             let fs = app_state.fs.clone();
-            move |_, action: &zed_actions::DecreaseUiFontSize, _window, cx| {
+            move |_, action: &sands_actions::DecreaseUiFontSize, _window, cx| {
                 if action.persist {
                     update_settings_file(fs.clone(), cx, move |settings, cx| {
                         let ui_font_size = ThemeSettings::get_global(cx).ui_font_size(cx) - px(1.0);
@@ -1193,7 +1193,7 @@ fn register_actions(
         })
         .register_action({
             let fs = app_state.fs.clone();
-            move |_, action: &zed_actions::ResetUiFontSize, _window, cx| {
+            move |_, action: &sands_actions::ResetUiFontSize, _window, cx| {
                 if action.persist {
                     update_settings_file(fs.clone(), cx, move |settings, _| {
                         settings.theme.ui_font_size = None;
@@ -1205,7 +1205,7 @@ fn register_actions(
         })
         .register_action({
             let fs = app_state.fs.clone();
-            move |_, action: &zed_actions::IncreaseBufferFontSize, _window, cx| {
+            move |_, action: &sands_actions::IncreaseBufferFontSize, _window, cx| {
                 if action.persist {
                     update_settings_file(fs.clone(), cx, move |settings, cx| {
                         let buffer_font_size =
@@ -1222,7 +1222,7 @@ fn register_actions(
         })
         .register_action({
             let fs = app_state.fs.clone();
-            move |_, action: &zed_actions::DecreaseBufferFontSize, _window, cx| {
+            move |_, action: &sands_actions::DecreaseBufferFontSize, _window, cx| {
                 if action.persist {
                     update_settings_file(fs.clone(), cx, move |settings, cx| {
                         let buffer_font_size =
@@ -1239,7 +1239,7 @@ fn register_actions(
         })
         .register_action({
             let fs = app_state.fs.clone();
-            move |_, action: &zed_actions::ResetBufferFontSize, _window, cx| {
+            move |_, action: &sands_actions::ResetBufferFontSize, _window, cx| {
                 if action.persist {
                     update_settings_file(fs.clone(), cx, move |settings, _| {
                         settings.theme.buffer_font_size = None;
@@ -1251,7 +1251,7 @@ fn register_actions(
         })
         .register_action({
             let fs = app_state.fs.clone();
-            move |_, action: &zed_actions::ResetAllZoom, _window, cx| {
+            move |_, action: &sands_actions::ResetAllZoom, _window, cx| {
                 if action.persist {
                     update_settings_file(fs.clone(), cx, move |settings, _| {
                         settings.theme.ui_font_size = None;
@@ -1299,7 +1299,7 @@ fn register_actions(
         .register_action(open_project_debug_tasks_file)
         .register_action(
             |workspace: &mut Workspace,
-             _: &zed_actions::project_panel::ToggleFocus,
+             _: &sands_actions::project_panel::ToggleFocus,
              window: &mut Window,
              cx: &mut Context<Workspace>| {
                 workspace.toggle_panel_focus::<ProjectPanel>(window, cx);
@@ -1939,7 +1939,7 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
                             .primary_icon(IconName::Settings)
                             .primary_on_click(|window, cx| {
                                 window.dispatch_action(
-                                    zed_actions::OpenSettingsFile.boxed_clone(),
+                                    sands_actions::OpenSettingsFile.boxed_clone(),
                                     cx,
                                 );
                                 cx.emit(DismissEvent);
@@ -1974,7 +1974,8 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
                         .primary_message("Open Settings File")
                         .primary_icon(IconName::Settings)
                         .primary_on_click(|window, cx| {
-                            window.dispatch_action(zed_actions::OpenSettingsFile.boxed_clone(), cx);
+                            window
+                                .dispatch_action(sands_actions::OpenSettingsFile.boxed_clone(), cx);
                             cx.emit(DismissEvent);
                         })
                     })
@@ -2261,7 +2262,7 @@ fn show_keymap_file_json_error(
                 .primary_message("Open Keymap File")
                 .primary_icon(IconName::Settings)
                 .primary_on_click(|window, cx| {
-                    window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx);
+                    window.dispatch_action(sands_actions::OpenKeymapFile.boxed_clone(), cx);
                     cx.emit(DismissEvent);
                 })
         })
@@ -2278,7 +2279,7 @@ fn show_keymap_file_load_error(
         error_message,
         "Open Keymap File".into(),
         |window, cx| {
-            window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx);
+            window.dispatch_action(sands_actions::OpenKeymapFile.boxed_clone(), cx);
             cx.emit(DismissEvent);
         },
         cx,
@@ -2502,7 +2503,7 @@ fn open_project_tasks_file(
 
 fn open_worktree_setup_tasks_file(
     workspace: &mut Workspace,
-    _: &zed_actions::OpenWorktreeSetupTasks,
+    _: &sands_actions::OpenWorktreeSetupTasks,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
@@ -2551,7 +2552,7 @@ fn open_worktree_setup_tasks_file(
 
 fn open_project_debug_tasks_file(
     workspace: &mut Workspace,
-    _: &zed_actions::OpenProjectDebugTasks,
+    _: &sands_actions::OpenProjectDebugTasks,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
@@ -3143,7 +3144,7 @@ mod tests {
                     }));
                 });
                 window.dispatch_action(
-                    Box::new(zed_actions::OpenRemote {
+                    Box::new(sands_actions::OpenRemote {
                         from_existing_connection: true,
                         create_new_window: Some(false),
                     }),
@@ -6485,7 +6486,7 @@ mod tests {
             project_panel::init(cx);
             outline_panel::init(cx);
             terminal_view::init(cx);
-            let credentials_provider = zed_credentials_provider::global(cx);
+            let credentials_provider = sands_credentials_provider::global(cx);
             copilot_chat::init(
                 app_state.client.http_client(),
                 credentials_provider,
@@ -6827,7 +6828,7 @@ mod tests {
         // User-defined bindings to AI actions should also be filtered.
         let user_binding = KeyBinding::new(
             "ctrl-enter",
-            zed_actions::assistant::InlineAssist { prompt: None },
+            sands_actions::assistant::InlineAssist { prompt: None },
             None,
         );
         cx.update(|cx| reload_keymaps(cx, vec![user_binding]));

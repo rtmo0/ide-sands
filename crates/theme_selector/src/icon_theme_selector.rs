@@ -5,6 +5,7 @@ use gpui::{
     Window,
 };
 use picker::{Picker, PickerDelegate};
+use sands_actions::{ExtensionCategoryFilter, Extensions};
 use settings::{Settings as _, SettingsStore, update_settings_file};
 use std::sync::Arc;
 use theme::{Appearance, SystemAppearance, ThemeMeta, ThemeRegistry};
@@ -12,7 +13,6 @@ use theme_settings::{IconThemeName, IconThemeSelection, ThemeSettings};
 use ui::{ListItem, ListItemSpacing, prelude::*, v_flex};
 use util::ResultExt;
 use workspace::{ModalView, ui::HighlightedLabel};
-use zed_actions::{ExtensionCategoryFilter, Extensions};
 
 pub(crate) struct IconThemeSelector {
     picker: Entity<Picker<IconThemeSelectorDelegate>>,
@@ -425,7 +425,7 @@ mod tests {
         workspace: &Entity<workspace::Workspace>,
         cx: &mut VisualTestContext,
     ) -> Entity<Picker<IconThemeSelectorDelegate>> {
-        cx.dispatch_action(zed_actions::icon_theme_selector::Toggle {
+        cx.dispatch_action(sands_actions::icon_theme_selector::Toggle {
             themes_filter: None,
         });
         cx.run_until_parked();

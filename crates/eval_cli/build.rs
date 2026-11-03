@@ -1,10 +1,10 @@
 fn main() {
-    let cargo_toml =
-        std::fs::read_to_string("../zed/Cargo.toml").expect("Failed to read crates/zed/Cargo.toml");
+    let cargo_toml = std::fs::read_to_string("../sands/Cargo.toml")
+        .expect("Failed to read crates/sands/Cargo.toml");
     let version = cargo_toml
         .lines()
         .find(|line| line.starts_with("version = "))
-        .expect("Version not found in crates/zed/Cargo.toml")
+        .expect("Version not found in crates/sands/Cargo.toml")
         .split('=')
         .nth(1)
         .expect("Invalid version format")

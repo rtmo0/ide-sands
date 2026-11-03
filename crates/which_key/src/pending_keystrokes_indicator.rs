@@ -280,7 +280,7 @@ impl Render for PendingKeystrokesIndicator {
 
         let button = ButtonLike::new("pending-keystrokes-indicator")
             .on_click(|_, window, cx| {
-                window.dispatch_action(zed_actions::dev::OpenKeyContextView.boxed_clone(), cx);
+                window.dispatch_action(sands_actions::dev::OpenKeyContextView.boxed_clone(), cx);
             })
             .when_some(render_state.timeout.as_ref(), |button, timeout| {
                 let remaining_fraction = if timeout.timeout_duration.is_zero() {
@@ -466,7 +466,7 @@ mod tests {
 
     /// Binds each keystroke sequence to the action the test view counts.
     fn counted_bindings<const N: usize>(keystrokes: [&'static str; N]) -> [KeyBinding; N] {
-        keystrokes.map(|keystrokes| binding(keystrokes, zed_actions::dev::OpenKeyContextView))
+        keystrokes.map(|keystrokes| binding(keystrokes, sands_actions::dev::OpenKeyContextView))
     }
 
     struct TestView {
@@ -713,7 +713,7 @@ mod tests {
                 .on_action(|_: &LongerBinding, _, _| {})
                 .on_action(|_: &LongestBinding, _, _| {})
                 .on_action(
-                    cx.listener(|this, _: &zed_actions::dev::OpenKeyContextView, _, _| {
+                    cx.listener(|this, _: &sands_actions::dev::OpenKeyContextView, _, _| {
                         this.open_key_context_view_count
                             .set(this.open_key_context_view_count.get() + 1);
                     }),
@@ -895,7 +895,7 @@ mod tests {
             snapshot.bindings,
             vec![(
                 vec!["j".to_string()],
-                humanize_action_name(zed_actions::dev::OpenKeyContextView.name()),
+                humanize_action_name(sands_actions::dev::OpenKeyContextView.name()),
             )]
         );
 
@@ -949,7 +949,7 @@ mod tests {
     fn test_keyboard_popover_respects_overrides_and_unbinding(cx: &mut TestAppContext) {
         // Each override is bound after the default `alt-/`, so it takes precedence.
         for (override_binding, expected_action_count) in [
-            (binding("alt-/", zed_actions::dev::OpenKeyContextView), 1),
+            (binding("alt-/", sands_actions::dev::OpenKeyContextView), 1),
             (binding("alt-/", gpui::NoAction), 0),
             (
                 binding("alt-/", gpui::Unbind(ShowPendingBindings.name().into())),

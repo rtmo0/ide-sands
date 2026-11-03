@@ -83,12 +83,12 @@ gpui_wgpu = ["src/*.wgsl"]
 extension_host = ["../extension_api/wit/**"]
 # cbindgen reads the renderer source directly from build.rs to generate shader bindings.
 gpui_apple = ["../gpui/src/**", "src/metal_renderer.rs", "src/shaders.metal"]
-eval_cli = ["../zed/Cargo.toml"]
+eval_cli = ["../sands/Cargo.toml"]
 prompt_store = ["../git_ui/src/commit_message_prompt.txt"]
-release_channel = ["../zed/RELEASE_CHANNEL"]
+release_channel = ["../sands/RELEASE_CHANNEL"]
 cli = ["../../script/uninstall.sh"]
-remote_server = ["../zed/Cargo.toml"]
+remote_server = ["../sands/Cargo.toml"]
 # `../zed/Cargo.toml`: build.rs reads it for ZED_PKG_VERSION. `../grammars/src`
 # and `src/prompts` are embedded in release builds; dev builds read them at
 # runtime via fs_embed.
-edit_prediction_cli = ["../zed/Cargo.toml", "../grammars/src/**", "src/prompts/**"]
+edit_prediction_cli = ["../sands/Cargo.toml", "../grammars/src/**", "src/prompts/**"]

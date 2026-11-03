@@ -11,12 +11,12 @@ use gpui::{
 use indoc::{formatdoc, indoc};
 use language::{Buffer, Capability, DiskState, File, LocalFile, Rope};
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
+use sands_actions::editor::{MoveDown, MoveUp};
 use settings::{
     DisplayIn, LocalSettingsKind, LocalSettingsPath, SettingsStore, ShowMinimap, WorktreeId,
 };
 use theme::ActiveTheme as _;
 use util::{RandomCharIter, paths::PathStyle, rel_path::RelPath};
-use zed_actions::editor::{MoveDown, MoveUp};
 
 struct BenchFile {
     path: Arc<RelPath>,

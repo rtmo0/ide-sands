@@ -61,7 +61,7 @@ terminal.workspace = true
 uuid.workspace = true
 util.workspace = true
 watch.workspace = true
-zed_credentials_provider.workspace = true
+sands_credentials_provider.workspace = true
 
 [dev-dependencies]
 client = { workspace = true, features = ["test-support"] }

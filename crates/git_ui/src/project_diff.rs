@@ -25,6 +25,7 @@ use project::{
         diff_buffer_list::{self, DiffBase},
     },
 };
+use sands_actions::git as git_actions;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use settings::GitDiffBaseSetting;
@@ -37,7 +38,6 @@ use workspace::{
     item::{Item, ItemEvent, ItemHandle, SaveOptions},
     searchable::SearchableItemHandle,
 };
-use zed_actions::git as git_actions;
 
 actions!(
     git,
@@ -1030,7 +1030,7 @@ mod tests {
         });
     }
 
-    use zed_actions::git as git_actions;
+    use sands_actions::git as git_actions;
 
     use crate::branch_diff::BranchDiff;
     use crate::project_diff::{self, ProjectDiff};

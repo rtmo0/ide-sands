@@ -17,6 +17,7 @@ use gpui::{
 use menu;
 use persistence::TerminalDb;
 use project::{Project, ProjectEntryId, search::SearchQuery};
+use sands_actions::{agent::AddSelectionToThread, assistant::InlineAssist};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use settings::{
@@ -60,7 +61,6 @@ use workspace::{
         Direction, SearchEvent, SearchOptions, SearchToken, SearchableItem, SearchableItemHandle,
     },
 };
-use zed_actions::{agent::AddSelectionToThread, assistant::InlineAssist};
 
 struct ImeState {
     marked_text: String,
@@ -1203,8 +1203,8 @@ impl TerminalView {
     }
 }
 
-fn terminal_rerun_override(task: &TaskId) -> zed_actions::Rerun {
-    zed_actions::Rerun {
+fn terminal_rerun_override(task: &TaskId) -> sands_actions::Rerun {
+    sands_actions::Rerun {
         task_id: Some(task.0.clone()),
         allow_concurrent_runs: Some(true),
         use_new_terminal: Some(false),
@@ -2539,7 +2539,7 @@ mod tests {
         cx.update(|cx| {
             cx.on_action({
                 let rerun_count = rerun_count.clone();
-                move |_: &zed_actions::Rerun, _| rerun_count.set(rerun_count.get() + 1)
+                move |_: &sands_actions::Rerun, _| rerun_count.set(rerun_count.get() + 1)
             });
         });
         let (pane, terminal, terminal_view) =

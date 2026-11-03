@@ -87,7 +87,7 @@ let
   gpu-lib = if withGLES then libglvnd else vulkan-loader;
   commonArgs =
     let
-      zedCargoLock = builtins.fromTOML (builtins.readFile ../crates/zed/Cargo.toml);
+      zedCargoLock = builtins.fromTOML (builtins.readFile ../crates/sands/Cargo.toml);
       stdenv' = stdenv;
     in
     rec {
@@ -354,7 +354,7 @@ craneLib.buildPackage (
     # TODO: put this in a separate derivation that depends on src to avoid running it on every build
     preBuild = ''
       ALLOW_MISSING_LICENSES=yes bash script/generate-licenses
-      echo nightly > crates/zed/RELEASE_CHANNEL
+      echo nightly > crates/sands/RELEASE_CHANNEL
     '';
 
     installPhase =
@@ -362,7 +362,7 @@ craneLib.buildPackage (
         ''
           runHook preInstall
 
-          pushd crates/zed
+          pushd crates/sands
           sed -i "s/package.metadata.bundle-nightly/package.metadata.bundle/" Cargo.toml
           export CARGO_BUNDLE_SKIP_BUILD=true
           app_path="$(cargo bundle --profile $CARGO_PROFILE | xargs)"
@@ -390,9 +390,9 @@ craneLib.buildPackage (
           ln -s $out/bin/zed $out/bin/zeditor  # home-manager expects the CLI binary to be here
 
 
-          install -D "crates/zed/resources/app-icon-nightly@2x.png" \
+          install -D "crates/sands/resources/app-icon-nightly@2x.png" \
             "$out/share/icons/hicolor/1024x1024@2x/apps/zed.png"
-          install -D crates/zed/resources/app-icon-nightly.png \
+          install -D crates/sands/resources/app-icon-nightly.png \
             $out/share/icons/hicolor/512x512/apps/zed.png
 
           # TODO: icons should probably be named "zed-nightly"
@@ -403,7 +403,7 @@ craneLib.buildPackage (
             export APP_NAME="Zed Nightly"
             export APP_ARGS="%U"
             mkdir -p "$out/share/applications"
-            ${lib.getExe envsubst} < "crates/zed/resources/zed.desktop.in" > "$out/share/applications/dev.zed.Zed-Nightly.desktop"
+            ${lib.getExe envsubst} < "crates/sands/resources/zed.desktop.in" > "$out/share/applications/dev.zed.Zed-Nightly.desktop"
             chmod +x "$out/share/applications/dev.zed.Zed-Nightly.desktop"
           )
 

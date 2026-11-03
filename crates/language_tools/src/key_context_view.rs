@@ -3,6 +3,7 @@ use gpui::{
     KeyBindingContextPredicate, KeyContext, Keystroke, MouseButton, Render, Subscription, Task,
 };
 use itertools::Itertools;
+use sands_actions::dev::OpenKeyContextView;
 use serde_json::json;
 use ui::{Button, ButtonStyle};
 use ui::{
@@ -11,7 +12,6 @@ use ui::{
     h_flex, px, v_flex,
 };
 use workspace::{Item, SplitDirection, Workspace};
-use zed_actions::dev::OpenKeyContextView;
 
 pub fn init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, _, _| {
@@ -212,19 +212,19 @@ impl Render for KeyContextView {
                         Button::new("view_default_keymap", "View Default Keymap")
                             .style(ButtonStyle::Filled)
                             .key_binding(ui::KeyBinding::for_action(
-                                &zed_actions::OpenDefaultKeymap,
+                                &sands_actions::OpenDefaultKeymap,
                                 cx
                             ))
                             .on_click(|_, window, cx| {
-                                window.dispatch_action(zed_actions::OpenDefaultKeymap.boxed_clone(), cx);
+                                window.dispatch_action(sands_actions::OpenDefaultKeymap.boxed_clone(), cx);
                             }),
                     )
                     .child(
                         Button::new("edit_your_keymap", "Edit Keymap File")
                             .style(ButtonStyle::Filled)
-                            .key_binding(ui::KeyBinding::for_action(&zed_actions::OpenKeymapFile, cx))
+                            .key_binding(ui::KeyBinding::for_action(&sands_actions::OpenKeymapFile, cx))
                             .on_click(|_, window, cx| {
-                                window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx);
+                                window.dispatch_action(sands_actions::OpenKeymapFile.boxed_clone(), cx);
                             }),
                     ),
             )
