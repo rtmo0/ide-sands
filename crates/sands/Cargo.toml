@@ -6,7 +6,7 @@ version = "1.28.0"
 publish.workspace = true
 license = "GPL-3.0-or-later"
 authors = ["Zed Team <hi@zed.dev>"]
-default-run = "sands"
+default-run = "Sands"
 
 [lints]
 workspace = true
@@ -55,7 +55,7 @@ visual-tests = [
 ]
 
 [[bin]]
-name = "sands"
+name = "Sands"
 path = "src/main.rs"
 
 [[bin]]

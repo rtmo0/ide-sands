@@ -107,7 +107,7 @@ rustup target add $target_triple
 
 echo "Compiling zed binaries"
 if [[ "$target_dir" = "release" ]]; then
-    cargo --config .cargo/bundle-config.toml rustc ${build_flag} ${zed_features} --package sands --bin sands --target $target_triple -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
+    cargo --config .cargo/bundle-config.toml rustc ${build_flag} ${zed_features} --package sands --bin Sands --target $target_triple -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
     cargo --config .cargo/bundle-config.toml build ${build_flag} --package cli --target $target_triple
 else
     cargo --config .cargo/bundle-config.toml build ${build_flag} ${zed_features} --package sands --package cli --target $target_triple
@@ -226,7 +226,7 @@ function sign_app_binaries() {
         # sequence of codesign commands modeled after this example: https://developer.apple.com/forums/thread/701514
         /usr/bin/codesign --deep --force --timestamp --options runtime --sign "$IDENTITY" "${app_path}/Contents/MacOS/cli" -v
         /usr/bin/codesign --deep --force --timestamp --options runtime --sign "$IDENTITY" "${app_path}/Contents/MacOS/git" -v
-        /usr/bin/codesign --deep --force --timestamp --options runtime --entitlements crates/sands/resources/zed.entitlements --sign "$IDENTITY" "${app_path}/Contents/MacOS/sands" -v
+        /usr/bin/codesign --deep --force --timestamp --options runtime --entitlements crates/sands/resources/zed.entitlements --sign "$IDENTITY" "${app_path}/Contents/MacOS/Sands" -v
         /usr/bin/codesign --force --timestamp --options runtime --entitlements crates/sands/resources/zed.entitlements --sign "$IDENTITY" "${app_path}" -v
     else
         echo "One or more of the following variables are missing: MACOS_CERTIFICATE, MACOS_CERTIFICATE_PASSWORD, APPLE_NOTARIZATION_KEY, APPLE_NOTARIZATION_KEY_ID, APPLE_NOTARIZATION_ISSUER_ID"
@@ -321,7 +321,7 @@ function extract_debug_symbols() {
         return
     fi
     debug_symbols_extracted=true
-    if ! dsymutil --flat "target/${target_triple}/${target_dir}/sands" 2> target/dsymutil.log; then
+    if ! dsymutil --flat "target/${target_triple}/${target_dir}/Sands" 2> target/dsymutil.log; then
         echo "dsymutil failed"
         cat target/dsymutil.log
         exit 1
@@ -343,7 +343,7 @@ function upload_debug_symbols() {
         for attempt in 1 2 3; do
             echo "Sentry upload attempt $attempt..."
             if sentry-cli debug-files upload --include-sources --wait -p zed -o zed-dev \
-                "target/${target_triple}/${target_dir}/sands.dwarf" \
+                "target/${target_triple}/${target_dir}/Sands.dwarf" \
                 "target/${target_triple}/${target_dir}/remote-server.dwarf"; then
                 break
             else
@@ -366,12 +366,12 @@ upload_debug_symbols
 # also keep symbols recoverable when the sentry upload is skipped.
 if [[ "$target_dir" == "release" && "$local_install" != true ]]; then
     extract_debug_symbols
-    strip -x "target/${target_triple}/${target_dir}/sands"
+    strip -x "target/${target_triple}/${target_dir}/Sands"
     strip -x "target/${target_triple}/${target_dir}/cli"
     strip -x "target/${target_triple}/${target_dir}/remote-server"
 fi
 
-cp target/${target_triple}/${target_dir}/sands "${app_path}/Contents/MacOS/sands"
+cp target/${target_triple}/${target_dir}/Sands "${app_path}/Contents/MacOS/Sands"
 cp target/${target_triple}/${target_dir}/cli "${app_path}/Contents/MacOS/cli"
 sign_app_binaries
 
