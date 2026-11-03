@@ -1877,9 +1877,10 @@ mod tests {
         store.register_setting::<ItemSettings>();
         store.register_setting::<DefaultLanguageSettings>();
 
+        // Sands ships with auto-update off.
         assert_eq!(
             store.get::<AutoUpdateSetting>(None),
-            &AutoUpdateSetting { auto_update: true }
+            &AutoUpdateSetting { auto_update: false }
         );
         assert_eq!(
             store.get::<ItemSettings>(None).close_position,

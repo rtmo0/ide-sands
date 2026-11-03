@@ -199,7 +199,9 @@ impl ReleaseChannel {
 
     /// Returns whether we want to poll for updates for this [`ReleaseChannel`]
     pub fn poll_for_updates(&self) -> bool {
-        !matches!(self, ReleaseChannel::Dev)
+        // Zed's updater would replace Sands with a Zed release from zed.dev. Updates stay off
+        // until Sands updates from its own GitHub releases.
+        false
     }
 
     /// Returns the display name for this [`ReleaseChannel`].

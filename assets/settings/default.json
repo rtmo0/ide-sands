@@ -34,7 +34,7 @@
   // The name of a font to use for rendering text in the editor
   // ".ZedMono" currently aliases to Lilex
   // but this may change in the future.
-  "buffer_font_family": ".ZedMono",
+  "buffer_font_family": "Menlo",
   // Set the buffer text's font fallbacks, this will be merged with
   // the platform's default fallbacks.
   "buffer_font_fallbacks": null,
@@ -44,7 +44,7 @@
     // "calt": false
   },
   // The default font size for text in the editor
-  "buffer_font_size": 15,
+  "buffer_font_size": 12,
   // The weight of the editor font in standard CSS units from 100 to 900.
   "buffer_font_weight": 400,
   // Set the buffer's line height.
@@ -57,12 +57,14 @@
   //         "buffer_line_height": {
   //           "custom": 2
   //         },
-  "buffer_line_height": "comfortable",
+  "buffer_line_height": {
+    "custom": 1.5,
+  },
   // The name of a font to use for rendering text in the UI
   // You can set this to ".SystemUIFont" to use the system font
   // ".ZedSans" currently aliases to "IBM Plex Sans", but this may
   // change in the future
-  "ui_font_family": ".ZedSans",
+  "ui_font_family": ".SystemUIFont",
   // Set the UI's font fallbacks, this will be merged with the platform's
   // default font fallbacks.
   "ui_font_fallbacks": null,
@@ -74,7 +76,7 @@
   // The weight of the UI font in standard CSS units from 100 to 900.
   "ui_font_weight": 400,
   // The default font size for text in the UI
-  "ui_font_size": 16,
+  "ui_font_size": 13,
   // The font family for agent responses in the agent panel. Falls back to the UI font family if unset.
   "agent_ui_font_family": null,
   // The default font size for agent responses in the agent panel. Falls back to the UI font size if unset.
@@ -1217,9 +1219,9 @@
     // The default model to use when creating new threads.
     "default_model": {
       // The provider to use.
-      "provider": "zed.dev",
+      "provider": "anthropic",
       // The model to use.
-      "model": "claude-sonnet-4",
+      "model": "claude-sonnet-4-5",
       // Whether thinking is enabled.
       "enable_thinking": false,
     },
@@ -2175,7 +2177,9 @@
     //         "line_height": {
     //           "custom": 2
     //         },
-    "line_height": "standard",
+    "line_height": {
+      "custom": 1.25,
+    },
     // Activate the python virtual environment, if one is found, in the
     // terminal's working directory (as resolved by the working_directory
     // setting). Set this to "off" to disable this behavior.

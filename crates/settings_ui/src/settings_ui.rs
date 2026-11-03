@@ -5524,6 +5524,12 @@ pub mod test {
 
     pub fn register_settings(cx: &mut App) {
         settings::init(cx);
+        // The layout expectations below assume Zed's 16px UI font; Sands defaults to 13px.
+        cx.update_global::<SettingsStore, _>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.theme.ui_font_size = Some(settings::FontSize(16.));
+            });
+        });
         theme_settings::init(theme::LoadThemes::JustBase, cx);
         editor::init(cx);
         menu::init();

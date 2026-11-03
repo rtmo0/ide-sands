@@ -198,6 +198,26 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
 }
 static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
 
+/// Commands that only work with Zed's own services: the account, collaboration, updates from
+/// zed.dev, feedback to the Zed team and rating Zed's edit predictions.
+const ZED_SERVICE_COMMAND_NAMESPACES: [&str; 7] = [
+    "client",
+    "collab",
+    "collab_panel",
+    "channel_modal",
+    "auto_update",
+    "feedback",
+    "zeta",
+];
+
+fn hide_zed_service_commands(cx: &mut App) {
+    command_palette_hooks::CommandPaletteFilter::update_global(cx, |filter, _| {
+        for namespace in ZED_SERVICE_COMMAND_NAMESPACES {
+            filter.hide_namespace(namespace);
+        }
+    });
+}
+
 fn main() {
     STARTUP_TIME.get_or_init(|| Instant::now());
 
@@ -676,6 +696,7 @@ fn main() {
             cx.background_executor().clone(),
         );
         command_palette::init(cx);
+        hide_zed_service_commands(cx);
         let copilot_chat_configuration = copilot_chat::CopilotChatConfiguration {
             enterprise_uri: settings::CopilotSettings::get_global(cx)
                 .enterprise_uri
