@@ -108,6 +108,8 @@ async fn with_remote_sync_timeout<T>(
 /// functionality has been integrated into the core editor.
 static SUPPRESSED_EXTENSIONS: LazyLock<FxHashSet<&str>> = LazyLock::new(|| {
     FxHashSet::from_iter([
+        // Built into Sands.
+        "html",
         "snippets",
         "ruff",
         "ty",
