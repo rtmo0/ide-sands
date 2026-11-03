@@ -85,7 +85,9 @@ Zed's platform build guides still apply for details:
 
 Sands, like Zed, is licensed primarily under GPL-3.0-or-later, with Apache-2.0 components where marked (such as GPUI).
 The bundled Sands themes are based on [JetBrains Themes](https://github.com/artemevsevev/zed-theme-jetbrains)
-by Artem Evsevev (Apache-2.0), see `assets/themes/LICENSES`.
+by Artem Evsevev (Apache-2.0), see `assets/themes/LICENSES`. The bundled
+[JetBrains New UI icons](https://github.com/ankddev/zed-jetbrains-newui-icons) are MIT-licensed, see
+`assets/icons/LICENSES`.
 
 License information for third party dependencies must be correctly provided for CI to pass.
 

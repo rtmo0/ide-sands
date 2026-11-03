@@ -11,8 +11,7 @@
     "light": "Sands Light",
     "dark": "Sands Dark",
   },
-  // Provided by the auto-installed `jetbrains-new-ui-icons` extension. Until it is installed,
-  // the built-in "Zed (Default)" icons are shown.
+  // The JetBrains New UI icons ship with Sands (assets/icons/icon_themes/jetbrains).
   "icon_theme": {
     "mode": "system",
     "light": "JetBrains New UI Icons (Light)",
@@ -2377,7 +2376,6 @@
   // and change the value to `false`.
   "auto_install_extensions": {
     "html": true,
-    "jetbrains-new-ui-icons": true,
   },
   // Whether to suggest installing extensions based on the files you open.
   "suggest_extensions": true,

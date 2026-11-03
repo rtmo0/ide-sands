@@ -238,6 +238,34 @@ pub fn load_bundled_themes(registry: &ThemeRegistry) {
         let refined = refine_theme_family(theme_family);
         registry.insert_theme_families([refined]);
     }
+
+    load_bundled_icon_themes(registry);
+}
+
+/// Loads icon themes shipped in `assets/icons/icon_themes/<name>/`. Their icon paths are relative
+/// to that directory and resolve to embedded assets, so they need no files on disk.
+fn load_bundled_icon_themes(registry: &ThemeRegistry) {
+    let icon_theme_paths = registry
+        .assets()
+        .list("icons/icon_themes/")
+        .log_err()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|path| path.ends_with(".json"));
+
+    for path in icon_theme_paths {
+        let Some(contents) = registry.assets().load(&path).log_err().flatten() else {
+            continue;
+        };
+        let theme_path = std::path::Path::new(path.as_ref());
+        let Some(icons_root) = theme_path.parent() else {
+            continue;
+        };
+        registry
+            .load_icon_theme(theme_path, icons_root, contents.into_owned())
+            .with_context(|| format!("failed to load bundled icon theme at path \"{path}\""))
+            .log_err();
+    }
 }
 
 /// Loads a user theme from the given bytes into the registry.
