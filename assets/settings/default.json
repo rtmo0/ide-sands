@@ -8,10 +8,16 @@
   // - "dark": Use the theme indicated by the "dark" field
   "theme": {
     "mode": "system",
-    "light": "One Light",
-    "dark": "One Dark",
+    "light": "Sands Light",
+    "dark": "Sands Dark",
   },
-  "icon_theme": "Zed (Default)",
+  // Provided by the auto-installed `jetbrains-new-ui-icons` extension. Until it is installed,
+  // the built-in "Zed (Default)" icons are shown.
+  "icon_theme": {
+    "mode": "system",
+    "light": "JetBrains New UI Icons (Light)",
+    "dark": "JetBrains New UI Icons (Dark)",
+  },
   // The name of a base set of key bindings to use.
   // This setting can take the following values:
   //
@@ -2367,6 +2373,7 @@
   // and change the value to `false`.
   "auto_install_extensions": {
     "html": true,
+    "jetbrains-new-ui-icons": true,
   },
   // Whether to suggest installing extensions based on the files you open.
   "suggest_extensions": true,

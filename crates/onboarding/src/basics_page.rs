@@ -26,8 +26,8 @@ use crate::{
     theme_preview::{ThemePreviewStyle, ThemePreviewTile},
 };
 
-const LIGHT_THEMES: [&str; 3] = ["One Light", "Ayu Light", "Gruvbox Light"];
-const DARK_THEMES: [&str; 3] = ["One Dark", "Ayu Dark", "Gruvbox Dark"];
+const LIGHT_THEMES: [&str; 3] = ["Sands Light", "One Light", "Ayu Light"];
+const DARK_THEMES: [&str; 3] = ["Sands Dark", "One Dark", "Ayu Dark"];
 const FAMILY_NAMES: [SharedString; 3] = [
     SharedString::new_static("One"),
     SharedString::new_static("Ayu"),
@@ -439,12 +439,12 @@ fn render_worktree_auto_trust_switch(tab_index: &mut isize, cx: &mut App) -> imp
         ui::ToggleState::Unselected
     };
 
-    let tooltip_description = "Zed can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.";
+    let tooltip_description = "Sands can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.";
 
     SwitchField::new(
         "onboarding-auto-trust-worktrees",
         Some("Trust All Projects By Default"),
-        Some("Automatically mark all new projects as trusted to unlock all Zed's features".into()),
+        Some("Automatically mark all new projects as trusted to unlock all Sands features".into()),
         toggle_state,
         {
             let fs = <dyn Fs>::global(cx);
