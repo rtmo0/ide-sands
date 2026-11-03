@@ -8,7 +8,7 @@ use gpui::{
 use picker::{Picker, PickerDelegate};
 use recent_projects::open_remote_project;
 use remote::{RemoteConnectionOptions, SshConnectionOptions};
-use sbx::{SandboxInfo, SandboxStatus, Sbx};
+use sbx::{SandboxInfo, SandboxStatus, Sbx, SbxError};
 use ui::{
     Color, Context, HighlightedLabel, Icon, IconName, InteractiveElement, IntoElement, Label,
     LabelCommon as _, LabelSize, ListItem, ListItemSpacing, ParentElement, Render, Styled,
@@ -16,9 +16,14 @@ use ui::{
 };
 use util::ResultExt as _;
 use workspace::{
-    ModalView, MultiWorkspace, OpenMode, OpenOptions, notifications::DetachAndPromptErr,
+    ModalView, MultiWorkspace, OpenMode, OpenOptions, Workspace, notifications::DetachAndPromptErr,
     with_active_or_new_workspace,
 };
+
+mod new_project_modal;
+mod projects_panel;
+
+pub use projects_panel::ProjectsPanel;
 
 actions!(
     sands,
@@ -34,6 +39,91 @@ pub fn init(cx: &mut App) {
             workspace.toggle_modal(window, cx, SandboxModal::new);
         });
     });
+    projects_panel::init(cx);
+}
+
+/// Checks that `sbx` is usable before listing, so failures name the actual problem.
+async fn list_sandboxes() -> Result<Vec<SandboxInfo>, SbxError> {
+    let sbx = Sbx::locate()?;
+    sbx.check().await?;
+    sbx.list().await
+}
+
+/// Connects to the sandbox over SSH and opens `directory`, or the sandbox workspace directory.
+/// Starts the sandbox if it is stopped and, after asking, configures the `*.sbx` SSH hosts.
+pub(crate) fn open_sandbox(
+    name: String,
+    directory: Option<String>,
+    open_mode: OpenMode,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let app_state = workspace::AppState::global(cx);
+    let open_options = OpenOptions {
+        requesting_window: window.window_handle().downcast::<MultiWorkspace>(),
+        open_mode,
+        ..Default::default()
+    };
+
+    window
+        .spawn(cx, async move |cx| {
+            let sbx = Sbx::locate()?;
+            let report = sbx.diagnose().await?;
+            if !report.ssh_configured() {
+                let answer = cx
+                    .update(|window, cx| {
+                        window.prompt(
+                            PromptLevel::Info,
+                            "Configure SSH for Docker Sandboxes?",
+                            Some(
+                                "Sands connects to sandboxes over SSH. `sbx setup ssh` adds an \
+                                 Include line for the *.sbx hosts to ~/.ssh/config.",
+                            ),
+                            &["Configure", "Cancel"],
+                            cx,
+                        )
+                    })?
+                    .await?;
+                if answer != 0 {
+                    return Ok(());
+                }
+                sbx.setup_ssh().await?;
+            }
+
+            let directory = match directory {
+                Some(directory) => directory,
+                None => sbx.default_directory(&name).await?,
+            };
+            let connection_options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+                host: sbx::ssh_host(&name).into(),
+                nickname: Some(name),
+                // Sands builds its own remote server, which cannot be downloaded inside the sandbox.
+                upload_binary_over_ssh: true,
+                ..Default::default()
+            });
+            open_remote_project(
+                connection_options,
+                vec![PathBuf::from(directory)],
+                app_state,
+                open_options,
+                cx,
+            )
+            .await?;
+            anyhow::Ok(())
+        })
+        .detach_and_prompt_err("Failed to open project", window, cx, |_, _, _| None);
+}
+
+/// The sandbox a workspace is connected to, if it was opened through its `<name>.sbx` host.
+pub(crate) fn connected_sandbox(workspace: &Workspace, cx: &App) -> Option<String> {
+    match workspace.project().read(cx).remote_connection_options(cx)? {
+        RemoteConnectionOptions::Ssh(options) => options
+            .host
+            .to_string()
+            .strip_suffix(".sbx")
+            .map(str::to_string),
+        _ => None,
+    }
 }
 
 enum SandboxList {
@@ -229,13 +319,7 @@ impl SandboxModal {
         let load_sandboxes = cx.spawn_in(window, {
             let picker = picker.downgrade();
             async move |_, cx| {
-                let sandboxes = cx
-                    .background_spawn(async move {
-                        let sbx = Sbx::locate()?;
-                        sbx.check().await?;
-                        sbx.list().await
-                    })
-                    .await;
+                let sandboxes = cx.background_spawn(list_sandboxes()).await;
                 let sandboxes = match sandboxes {
                     Ok(sandboxes) => SandboxList::Loaded(sandboxes),
                     Err(error) => SandboxList::Failed(error.to_string().into()),
@@ -257,61 +341,13 @@ impl SandboxModal {
     }
 
     fn open(&mut self, name: String, secondary: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let app_state = workspace::AppState::global(cx);
-        let open_options = OpenOptions {
-            requesting_window: window.window_handle().downcast::<MultiWorkspace>(),
-            open_mode: if secondary {
-                OpenMode::NewWindow
-            } else {
-                OpenMode::Activate
-            },
-            ..Default::default()
+        let open_mode = if secondary {
+            OpenMode::NewWindow
+        } else {
+            OpenMode::Activate
         };
-
         cx.emit(DismissEvent);
-        cx.spawn_in(window, async move |_, cx| {
-            let sbx = Sbx::locate()?;
-            let report = sbx.diagnose().await?;
-            if !report.ssh_configured() {
-                let answer = cx
-                    .update(|window, cx| {
-                        window.prompt(
-                            PromptLevel::Info,
-                            "Configure SSH for Docker Sandboxes?",
-                            Some(
-                                "Sands connects to sandboxes over SSH. `sbx setup ssh` adds an \
-                                 Include line for the *.sbx hosts to ~/.ssh/config.",
-                            ),
-                            &["Configure", "Cancel"],
-                            cx,
-                        )
-                    })?
-                    .await?;
-                if answer != 0 {
-                    return Ok(());
-                }
-                sbx.setup_ssh().await?;
-            }
-
-            let directory = sbx.default_directory(&name).await?;
-            let connection_options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
-                host: sbx::ssh_host(&name).into(),
-                nickname: Some(name),
-                // Sands builds its own remote server, which cannot be downloaded inside the sandbox.
-                upload_binary_over_ssh: true,
-                ..Default::default()
-            });
-            open_remote_project(
-                connection_options,
-                vec![PathBuf::from(directory)],
-                app_state,
-                open_options,
-                cx,
-            )
-            .await?;
-            anyhow::Ok(())
-        })
-        .detach_and_prompt_err("Failed to open sandbox", window, cx, |_, _, _| None);
+        open_sandbox(name, None, open_mode, window, cx);
     }
 
     fn cancel(&mut self, _: &menu::Cancel, _: &mut Window, cx: &mut Context<Self>) {

@@ -168,6 +168,10 @@ pub struct CreateOptions {
     pub agent: String,
     /// Host directories to bind-mount. Empty keeps the sandbox fully detached from the host.
     pub workspaces: Vec<PathBuf>,
+    /// Instead of bind-mounting, mount the host Git repository read-only and work on a private
+    /// clone inside the sandbox (`--clone`). Its commits reach the host through the
+    /// `sandbox-<name>` Git remote.
+    pub clone_workspace: bool,
     pub template: Option<String>,
     pub cpus: Option<u32>,
     pub memory: Option<String>,
@@ -429,6 +433,9 @@ fn create_arguments(options: &CreateOptions) -> Vec<OsString> {
     for (key, value) in &options.environment {
         arguments.extend(["--env".into(), format!("{key}={value}").into()]);
     }
+    if options.clone_workspace {
+        arguments.push("--clone".into());
+    }
     arguments.push(options.agent.clone().into());
     arguments.extend(
         options
@@ -638,6 +645,7 @@ mod tests {
             cpus: Some(4),
             memory: Some("8g".to_string()),
             environment: vec![("KEY".to_string(), "value".to_string())],
+            clone_workspace: true,
             template: None,
         });
         let arguments: Vec<String> = arguments
@@ -657,6 +665,7 @@ mod tests {
                 "8g",
                 "--env",
                 "KEY=value",
+                "--clone",
                 "shell",
                 "/work/repo"
             ]

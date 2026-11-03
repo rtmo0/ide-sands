@@ -22,5 +22,9 @@ recent_projects.workspace = true
 remote.workspace = true
 sbx.workspace = true
 ui.workspace = true
+ui_input.workspace = true
 util.workspace = true
 workspace.workspace = true
+
+[dev-dependencies]
+smol.workspace = true

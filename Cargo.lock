@@ -15731,7 +15731,9 @@ dependencies = [
  "recent_projects",
  "remote",
  "sbx",
+ "smol",
  "ui",
+ "ui_input",
  "util",
  "workspace",
 ]
