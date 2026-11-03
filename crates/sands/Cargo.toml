@@ -189,6 +189,7 @@ reqwest = { workspace = true, features = ["multipart"] }
 reqwest_client.workspace = true
 rope.workspace = true
 sandbox.workspace = true
+sandbox_ui.workspace = true
 search.workspace = true
 serde.workspace = true
 serde_json.workspace = true

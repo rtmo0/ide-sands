@@ -15720,6 +15720,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandbox_ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fuzzy_nucleo",
+ "gpui",
+ "menu",
+ "picker",
+ "recent_projects",
+ "remote",
+ "sbx",
+ "smol",
+ "ui",
+ "ui_input",
+ "util",
+ "workspace",
+]
+
+[[package]]
 name = "sands"
 version = "1.28.0"
 dependencies = [
@@ -15843,6 +15862,7 @@ dependencies = [
  "reqwest_client",
  "rope",
  "sandbox",
+ "sandbox_ui",
  "sands_actions",
  "sands_credentials_provider",
  "sands_env_vars",
