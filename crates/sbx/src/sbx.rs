@@ -147,6 +147,18 @@ impl DiagnoseReport {
         }
         Ok(())
     }
+
+    /// Whether `sbx setup ssh` has added the `*.sbx` hosts to the SSH client config.
+    /// The check passes either way, only its message tells the two states apart.
+    pub fn ssh_configured(&self) -> bool {
+        self.check("SSH client config")
+            .is_some_and(|check| check.message == "configured")
+    }
+}
+
+/// SSH host alias that `sbx setup ssh` routes to the sandbox through `sbx ssh proxy`.
+pub fn ssh_host(sandbox_name: &str) -> String {
+    format!("{sandbox_name}.sbx")
 }
 
 #[derive(Clone, Debug, Default)]
@@ -243,6 +255,36 @@ impl Sbx {
                 &display_command(&["exec", name, "true"]),
                 &output.stderr,
             ))
+        }
+    }
+
+    /// Adds an `Include` for the generated `*.sbx` host config to `~/.ssh/config`. Idempotent.
+    pub async fn setup_ssh(&self) -> Result<(), SbxError> {
+        let arguments = ["setup", "ssh"];
+        let output = self.run(&arguments).await?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(classify_failure(
+                &display_command(&arguments),
+                &output.stderr,
+            ))
+        }
+    }
+
+    /// The directory commands start in, which is the sandbox workspace. Starts the sandbox if it
+    /// is stopped.
+    pub async fn default_directory(&self, name: &str) -> Result<String, SbxError> {
+        let output = self.exec(name, &["pwd"]).await?;
+        let directory = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if output.status.success() && directory.starts_with('/') {
+            Ok(directory)
+        } else {
+            Err(SbxError::CommandFailed {
+                command: display_command(&["exec", name, "pwd"]),
+                message: first_error_line(&output.stderr)
+                    .unwrap_or_else(|| format!("unexpected working directory {directory:?}")),
+            })
         }
     }
 
@@ -569,6 +611,21 @@ mod tests {
             ]}"#,
         )?;
         assert!(matches!(report.ensure_ready(), Err(SbxError::NotLoggedIn)));
+        assert!(!report.ssh_configured());
+        Ok(())
+    }
+
+    #[test]
+    fn detects_ssh_configuration() -> TestResult {
+        let parse = |message: &str| -> Result<DiagnoseReport, SbxError> {
+            let json = format!(
+                r#"{{"checks": [{{"name": "SSH client config", "status": "pass", "message": "{message}"}}]}}"#
+            );
+            parse_json("sbx diagnose", json.as_bytes())
+        };
+        assert!(parse("configured")?.ssh_configured());
+        assert!(!parse("not configured")?.ssh_configured());
+        assert_eq!(ssh_host("spike"), "spike.sbx");
         Ok(())
     }
 

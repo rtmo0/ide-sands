@@ -15720,6 +15720,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandbox_ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fuzzy_nucleo",
+ "gpui",
+ "menu",
+ "picker",
+ "recent_projects",
+ "remote",
+ "sbx",
+ "ui",
+ "util",
+ "workspace",
+]
+
+[[package]]
 name = "sbx"
 version = "0.1.0"
 dependencies = [
@@ -22514,6 +22531,7 @@ dependencies = [
  "reqwest_client",
  "rope",
  "sandbox",
+ "sandbox_ui",
  "search",
  "semver",
  "serde",

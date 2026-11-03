@@ -1,0 +1,26 @@
+[package]
+name = "sandbox_ui"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/sandbox_ui.rs"
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+fuzzy_nucleo.workspace = true
+gpui.workspace = true
+menu.workspace = true
+picker.workspace = true
+recent_projects.workspace = true
+remote.workspace = true
+sbx.workspace = true
+ui.workspace = true
+util.workspace = true
+workspace.workspace = true
