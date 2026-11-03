@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#548af7"/></marker></defs>
+<rect x="0" y="0" width="1200" height="760" rx="16" fill="#1e1f22"/>
+<text x="40" y="52" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="26" font-weight="650" fill="#dfe1e5" text-anchor="start">Every project is its own Docker Sandbox</text>
+<text x="40" y="80" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#9da0a8" text-anchor="start">Code, agents, tools and connections live inside the project's microVM. Projects cannot see each other.</text>
+<rect x="40" y="106" width="1120" height="92" rx="12" fill="#2b2d30" stroke="#4e5157" stroke-width="1.5"/>
+<text x="64" y="136" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#d9a55b" text-anchor="start">YOUR MACHINE</text>
+<rect x="64" y="148" width="330" height="38" rx="8" fill="#393b40"/>
+<text x="78" y="172" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#dfe1e5" text-anchor="start">Sands IDE</text>
+<text x="163.60000000000002" y="172" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#9da0a8" text-anchor="start">editor, panels, debugger UI</text>
+<rect x="414" y="148" width="330" height="38" rx="8" fill="#393b40"/>
+<text x="428" y="172" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#dfe1e5" text-anchor="start">sbx</text>
+<text x="463.2" y="172" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#9da0a8" text-anchor="start">creates and runs sandboxes</text>
+<rect x="764" y="148" width="330" height="38" rx="8" fill="#393b40"/>
+<text x="778" y="172" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#dfe1e5" text-anchor="start">Credential proxy</text>
+<text x="922.4" y="172" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#9da0a8" text-anchor="start">secrets stay on the host</text>
+<line x1="216.0" y1="198" x2="216.0" y2="258" stroke="#548af7" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+<text x="224.0" y="236" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#548af7" text-anchor="start">SSH</text>
+<rect x="40" y="262" width="352" height="420" rx="14" fill="#2b2d30" stroke="#d9a55b" stroke-width="2"/>
+<text x="62" y="296" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="650" fill="#dfe1e5" text-anchor="start">shop-backend</text>
+<text x="62" y="318" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#d9a55b" text-anchor="start">Docker Sandbox · microVM</text>
+<rect x="58" y="340" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="72" y="360" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">CODE</text>
+<text x="72" y="379" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">github.com/acme/shop</text>
+<rect x="58" y="400" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="72" y="420" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">AGENTS</text>
+<text x="72" y="439" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">Claude Code</text>
+<rect x="58" y="460" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="72" y="480" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">TOOLCHAIN</text>
+<text x="72" y="499" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">Go · gopls · Delve</text>
+<rect x="58" y="520" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="72" y="540" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">DOCKER SERVICES</text>
+<text x="72" y="559" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">postgres, redis</text>
+<rect x="58" y="580" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="72" y="600" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">CONTEXT PLUGINS</text>
+<text x="72" y="619" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">PostgreSQL, Kubernetes</text>
+<text x="62" y="660" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9da0a8" text-anchor="start">own files · own Docker · own network policy</text>
+<line x1="600.0" y1="198" x2="600.0" y2="258" stroke="#548af7" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+<text x="608.0" y="236" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#548af7" text-anchor="start">SSH</text>
+<rect x="424" y="262" width="352" height="420" rx="14" fill="#2b2d30" stroke="#d9a55b" stroke-width="2"/>
+<text x="446" y="296" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="650" fill="#dfe1e5" text-anchor="start">mobile-app</text>
+<text x="446" y="318" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#d9a55b" text-anchor="start">Docker Sandbox · microVM</text>
+<rect x="442" y="340" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="456" y="360" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">CODE</text>
+<text x="456" y="379" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">~/work/mobile-app (read-only)</text>
+<rect x="442" y="400" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="456" y="420" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">AGENTS</text>
+<text x="456" y="439" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">Codex</text>
+<rect x="442" y="460" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="456" y="480" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">TOOLCHAIN</text>
+<text x="456" y="499" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">Flutter · Dart · DAP</text>
+<rect x="442" y="520" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="456" y="540" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">DOCKER SERVICES</text>
+<text x="456" y="559" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">firebase emulator</text>
+<rect x="442" y="580" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="456" y="600" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">CONTEXT PLUGINS</text>
+<text x="456" y="619" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">S3</text>
+<text x="446" y="660" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9da0a8" text-anchor="start">own files · own Docker · own network policy</text>
+<line x1="984.0" y1="198" x2="984.0" y2="258" stroke="#548af7" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+<text x="992.0" y="236" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#548af7" text-anchor="start">SSH</text>
+<rect x="808" y="262" width="352" height="420" rx="14" fill="#2b2d30" stroke="#d9a55b" stroke-width="2"/>
+<text x="830" y="296" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="650" fill="#dfe1e5" text-anchor="start">ml-service</text>
+<text x="830" y="318" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#d9a55b" text-anchor="start">Docker Sandbox · microVM</text>
+<rect x="826" y="340" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="840" y="360" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">CODE</text>
+<text x="840" y="379" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">github.com/acme/ml</text>
+<rect x="826" y="400" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="840" y="420" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">AGENTS</text>
+<text x="840" y="439" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">Gemini, OpenCode</text>
+<rect x="826" y="460" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="840" y="480" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">TOOLCHAIN</text>
+<text x="840" y="499" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">Python · basedpyright · debugpy</text>
+<rect x="826" y="520" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="840" y="540" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">DOCKER SERVICES</text>
+<text x="840" y="559" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">kafka</text>
+<rect x="826" y="580" width="316" height="50" rx="8" fill="#393b40"/>
+<text x="840" y="600" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#9da0a8" text-anchor="start">CONTEXT PLUGINS</text>
+<text x="840" y="619" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#dfe1e5" text-anchor="start">LDAP, S3</text>
+<text x="830" y="660" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9da0a8" text-anchor="start">own files · own Docker · own network policy</text>
+<line x1="408" y1="282" x2="408" y2="662" stroke="#db5c5c" stroke-width="3" stroke-dasharray="3 7"/>
+<circle cx="408" cy="472.0" r="15" fill="#1e1f22" stroke="#db5c5c" stroke-width="2"/>
+<line x1="402" y1="466.0" x2="414" y2="478.0" stroke="#db5c5c" stroke-width="2.5"/>
+<line x1="414" y1="466.0" x2="402" y2="478.0" stroke="#db5c5c" stroke-width="2.5"/>
+<line x1="792" y1="282" x2="792" y2="662" stroke="#db5c5c" stroke-width="3" stroke-dasharray="3 7"/>
+<circle cx="792" cy="472.0" r="15" fill="#1e1f22" stroke="#db5c5c" stroke-width="2"/>
+<line x1="786" y1="466.0" x2="798" y2="478.0" stroke="#db5c5c" stroke-width="2.5"/>
+<line x1="798" y1="466.0" x2="786" y2="478.0" stroke="#db5c5c" stroke-width="2.5"/>
+<text x="40" y="728" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#9da0a8" text-anchor="start">Agents push to Git and call model APIs through the proxy without ever seeing the credentials.</text>
+</svg>

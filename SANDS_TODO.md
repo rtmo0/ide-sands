@@ -2,8 +2,9 @@
 
 IDE на основе Zed, в которой проект целиком живёт в Docker Sandbox: несколько репозиториев, агенты
 (Claude CLI, Codex и т. п.), тулчейны, отладчики и подключённый контекст — базы данных, Kubernetes, S3,
-LDAP и прочее. На хосте — только Sands и `sbx`. Нормальная разработка с отладкой для C++, Rust, Go,
-Flutter/Dart, Python, Node.js, веба (Vue и т. п.) и C#.
+LDAP и прочее. На хосте — только Sands и `sbx`. Нормальная разработка с отладкой для Python, C#, Rust,
+C/C++, Go, TypeScript, Node.js, Vue, Angular и Flutter/Dart — и только для них. Расширений нет: всё
+нужное встроено в Sands.
 
 ## Принятые решения
 
@@ -211,8 +212,10 @@ Sands (форк Zed) на хосте
 ## Этап 7. Языки и отладка
 
 - [ ] Kits: базовый (git, build-essential, ripgrep); cpp (clang, clangd, gdb, cmake); rust (rustup,
-      rust-analyzer, CodeLLDB); go (gopls, delve); python (uv, pyright, debugpy); node (node, pnpm, vtsls,
-      Vue LS); flutter (Flutter SDK, Dart); dotnet (.NET SDK, csharp-ls/Roslyn, netcoredbg).
+      rust-analyzer, GDB); go (gopls, delve); python (uv, basedpyright, debugpy); node (node, pnpm, vtsls,
+      Vue LS, Angular LS); flutter (Flutter SDK, Dart); dotnet (.NET SDK, Roslyn, netcoredbg).
+- [ ] Встроить в Sands языки, которые в Zed были расширениями: C#, Vue, Angular, Dart (грамматики,
+      запросы, LSP-адаптеры, отладчик Dart).
 - [ ] Публикация kits в OCI-реестр, шаблоны для быстрого старта.
 - [ ] Отладчик C# на netcoredbg (MIT); проверить сборку для linux-arm64.
 - [ ] Отладка Dart/Flutter в удалённом проекте — исправить, если этап 0 покажет проблемы.
