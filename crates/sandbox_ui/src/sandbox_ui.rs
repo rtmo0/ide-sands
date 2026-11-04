@@ -1,11 +1,16 @@
 use std::{path::PathBuf, sync::Arc};
 
+use collections::HashSet;
 use fuzzy_nucleo::{StringMatch, StringMatchCandidate};
 use gpui::{
     App, AppContext as _, DismissEvent, Entity, EventEmitter, Focusable, PromptLevel, SharedString,
     Subscription, Task, actions,
 };
 use picker::{Picker, PickerDelegate};
+use project::{
+    trusted_worktrees::{PathTrust, TrustedWorktrees},
+    worktree_store::{WorktreeStore, WorktreeStoreEvent},
+};
 use recent_projects::open_remote_project;
 use remote::{RemoteConnectionOptions, SshConnectionOptions};
 use sbx::{SandboxInfo, SandboxStatus, Sbx, SbxError};
@@ -43,6 +48,8 @@ pub fn init(cx: &mut App) {
     });
     projects_panel::init(cx);
     sandbox_panel::init(cx);
+    cx.observe_new(|workspace: &mut Workspace, _, cx| trust_sandbox_worktrees(workspace, cx))
+        .detach();
 }
 
 /// Checks that `sbx` is usable before listing, so failures name the actual problem.
@@ -115,6 +122,36 @@ pub(crate) fn open_sandbox(
             anyhow::Ok(())
         })
         .detach_and_prompt_err("Failed to open project", window, cx, |_, _, _| None);
+}
+
+/// The sandbox is the trust boundary in Sands: code inside it cannot reach the host, so its
+/// worktrees are trusted and language servers start without the Restricted Mode prompt.
+fn trust_sandbox_worktrees(workspace: &mut Workspace, cx: &mut Context<Workspace>) {
+    if connected_sandbox(workspace, cx).is_none() {
+        return;
+    }
+    let worktree_store = workspace.project().read(cx).worktree_store();
+    trust_all_worktrees(&worktree_store, cx);
+    cx.subscribe(&worktree_store, |_, worktree_store, event, cx| {
+        if let WorktreeStoreEvent::WorktreeAdded(_) = event {
+            trust_all_worktrees(&worktree_store, cx);
+        }
+    })
+    .detach();
+}
+
+fn trust_all_worktrees(worktree_store: &Entity<WorktreeStore>, cx: &mut App) {
+    let Some(trusted_worktrees) = TrustedWorktrees::try_get_global(cx) else {
+        return;
+    };
+    let worktrees: HashSet<PathTrust> = worktree_store
+        .read(cx)
+        .worktrees()
+        .map(|worktree| PathTrust::Worktree(worktree.read(cx).id()))
+        .collect();
+    if !worktrees.is_empty() {
+        trusted_worktrees.update(cx, |store, cx| store.trust(worktree_store, worktrees, cx));
+    }
 }
 
 /// The sandbox a workspace is connected to, if it was opened through its `<name>.sbx` host.

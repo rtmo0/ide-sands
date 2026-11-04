@@ -168,7 +168,144 @@ pub struct SandboxProbe {
     pub repositories: Vec<SandboxRepository>,
     /// Agent CLIs found on the sandbox `PATH`.
     pub agents: Vec<String>,
+    /// Toolchains the project uses or that are installed, in [`Toolchain::ALL`] order.
+    pub toolchains: Vec<ToolchainStatus>,
 }
+
+/// Language toolchains Sands sets up inside sandboxes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Toolchain {
+    Go,
+    Python,
+    Node,
+    Flutter,
+    Rust,
+    DotNet,
+    Cpp,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolchainStatus {
+    pub toolchain: Toolchain,
+    /// Whether the workspace has files that need this toolchain, such as `go.mod`.
+    pub used_by_project: bool,
+    /// The installed version, or `None` when the toolchain is missing.
+    pub version: Option<String>,
+}
+
+impl ToolchainStatus {
+    pub fn is_missing(&self) -> bool {
+        self.used_by_project && self.version.is_none()
+    }
+}
+
+impl Toolchain {
+    pub const ALL: [Toolchain; 7] = [
+        Toolchain::Go,
+        Toolchain::Python,
+        Toolchain::Node,
+        Toolchain::Flutter,
+        Toolchain::Rust,
+        Toolchain::DotNet,
+        Toolchain::Cpp,
+    ];
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Toolchain::Go => "Go",
+            Toolchain::Python => "Python",
+            Toolchain::Node => "Node.js",
+            Toolchain::Flutter => "Flutter / Dart",
+            Toolchain::Rust => "Rust",
+            Toolchain::DotNet => ".NET",
+            Toolchain::Cpp => "C / C++",
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Toolchain::Go => "go",
+            Toolchain::Python => "python",
+            Toolchain::Node => "node",
+            Toolchain::Flutter => "flutter",
+            Toolchain::Rust => "rust",
+            Toolchain::DotNet => "dotnet",
+            Toolchain::Cpp => "cpp",
+        }
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|toolchain| toolchain.id() == id)
+    }
+
+    /// The toolchain a project file implies, by file name.
+    fn for_marker(file_name: &str) -> Option<Self> {
+        match file_name {
+            "go.mod" => Some(Toolchain::Go),
+            "pyproject.toml" | "requirements.txt" | "setup.py" | "Pipfile" => {
+                Some(Toolchain::Python)
+            }
+            "package.json" => Some(Toolchain::Node),
+            "pubspec.yaml" => Some(Toolchain::Flutter),
+            "Cargo.toml" => Some(Toolchain::Rust),
+            "CMakeLists.txt" | "meson.build" => Some(Toolchain::Cpp),
+            _ if file_name.ends_with(".csproj") || file_name.ends_with(".sln") => {
+                Some(Toolchain::DotNet)
+            }
+            _ => None,
+        }
+    }
+
+    /// Idempotent installation script. Language servers and debug adapters that Sands
+    /// downloads on demand are not installed here, only what they need to run.
+    fn install_script(self) -> &'static str {
+        match self {
+            Toolchain::Go => {
+                r#"command -v go >/dev/null || { version=$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n 1); curl -fsSL "https://go.dev/dl/$version.linux-$(dpkg --print-architecture).tar.gz" | sudo tar -C /usr/local -xz; }
+add_path /usr/local/go/bin
+add_path '$HOME/go/bin'"#
+            }
+            Toolchain::Python => "apt_install python3 python3-venv python3-pip",
+            Toolchain::Node => "command -v node >/dev/null || apt_install nodejs npm",
+            Toolchain::Flutter => {
+                r#"[ -x "$HOME/flutter/bin/flutter" ] || git clone --quiet --depth 1 -b stable https://github.com/flutter/flutter.git "$HOME/flutter"
+"$HOME/flutter/bin/flutter" --disable-analytics >/dev/null 2>&1
+"$HOME/flutter/bin/flutter" --version >/dev/null
+add_path '$HOME/flutter/bin'
+add_path '$HOME/.pub-cache/bin'"#
+            }
+            Toolchain::Rust => {
+                r#"command -v rustup >/dev/null || [ -x "$HOME/.cargo/bin/rustup" ] || curl -fsSL https://sh.rustup.rs | sh -s -- -y -q --component rust-analyzer --component rust-src
+add_path '$HOME/.cargo/bin'"#
+            }
+            Toolchain::DotNet => {
+                r#"command -v dotnet >/dev/null || apt_install dotnet-sdk-10.0
+if [ ! -x "$HOME/.local/share/netcoredbg/netcoredbg" ]; then
+  case "$(uname -m)" in aarch64) netcoredbg_arch=linux-arm64 ;; *) netcoredbg_arch=linux-amd64 ;; esac
+  mkdir -p "$HOME/.local/share"
+  curl -fsSL "https://github.com/Samsung/netcoredbg/releases/latest/download/netcoredbg-$netcoredbg_arch.tar.gz" | tar -xz -C "$HOME/.local/share"
+fi
+add_path '$HOME/.dotnet/tools'
+add_path '$HOME/.local/share/netcoredbg'"#
+            }
+            Toolchain::Cpp => "apt_install clang clangd gdb cmake",
+        }
+    }
+}
+
+const TOOLCHAIN_SCRIPT_PRELUDE: &str = r#"set -e
+apt_updated=
+apt_install() {
+  [ -n "$apt_updated" ] || { sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq; apt_updated=1; }
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" >/dev/null
+}
+add_path() {
+  for profile in "$HOME/.profile" "$HOME/.bashrc"; do
+    line="export PATH="$1:\$PATH""
+    grep -qxF "$line" "$profile" 2>/dev/null || echo "$line" >> "$profile"
+  done
+}
+"#;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SandboxRepository {
@@ -199,6 +336,15 @@ find "$PWD" -maxdepth 3 -name .git -prune 2>/dev/null | while read -r git_dir; d
   echo "repository=$repository|$(git -C "$repository" rev-parse --abbrev-ref HEAD 2>/dev/null)|$(git -C "$repository" remote get-url origin 2>/dev/null)"
 done
 for agent in AGENTS; do command -v "$agent" >/dev/null 2>&1 && echo "agent=$agent"; done
+find "$PWD" -maxdepth 5 \( -name node_modules -o -name .git -o -name build -o -name target -o -name .dart_tool \) -prune -o \( -name go.mod -o -name pyproject.toml -o -name requirements.txt -o -name setup.py -o -name Pipfile -o -name package.json -o -name pubspec.yaml -o -name Cargo.toml -o -name '*.csproj' -o -name '*.sln' -o -name CMakeLists.txt -o -name meson.build \) -print 2>/dev/null | while read -r marker; do echo "marker=${marker##*/}"; done
+command -v go >/dev/null 2>&1 && echo "toolchain=go|$(go version 2>/dev/null | cut -d ' ' -f 3)"
+command -v python3 >/dev/null 2>&1 && echo "toolchain=python|$(python3 --version 2>&1 | cut -d ' ' -f 2)"
+command -v node >/dev/null 2>&1 && echo "toolchain=node|$(node --version 2>/dev/null)"
+command -v dart >/dev/null 2>&1 && echo "toolchain=flutter|$(dart --version 2>&1 | head -n 1 | cut -d ' ' -f 4)"
+command -v rustc >/dev/null 2>&1 && echo "toolchain=rust|$(rustc --version 2>/dev/null | cut -d ' ' -f 2)"
+command -v dotnet >/dev/null 2>&1 && echo "toolchain=dotnet|$(dotnet --version 2>/dev/null)"
+command -v clangd >/dev/null 2>&1 && echo "toolchain=cpp|$(clangd --version 2>/dev/null | head -n 1 | grep -o '[0-9][0-9.]*' | head -n 1)"
+exit 0
 "#;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -464,7 +610,8 @@ impl Sbx {
     /// Starts the sandbox if it is stopped.
     pub async fn probe(&self, name: &str) -> Result<SandboxProbe, SbxError> {
         let script = PROBE_SCRIPT.replace("AGENTS", &KNOWN_AGENT_COMMANDS.join(" "));
-        let output = self.exec(name, &["sh", "-c", script.as_str()]).await?;
+        // A login shell picks up toolchains that installation added to `~/.profile`.
+        let output = self.exec(name, &["bash", "-lc", script.as_str()]).await?;
         if !output.status.success() && output.stdout.is_empty() {
             return Err(classify_failure(
                 &display_command(&["exec", name, "sh"]),
@@ -472,6 +619,43 @@ impl Sbx {
             ));
         }
         Ok(parse_probe(&String::from_utf8_lossy(&output.stdout)))
+    }
+
+    /// Installs toolchains inside the sandbox. This can take minutes (Flutter alone is close to
+    /// a gigabyte), so callers should show progress.
+    pub async fn install_toolchains(
+        &self,
+        name: &str,
+        toolchains: &[Toolchain],
+    ) -> Result<(), SbxError> {
+        if toolchains.is_empty() {
+            return Ok(());
+        }
+        let script = toolchain_install_script(toolchains);
+        let output = self.exec(name, &["bash", "-lc", script.as_str()]).await?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let names = toolchains
+            .iter()
+            .map(|toolchain| toolchain.display_name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let last_lines = stderr
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .rev()
+            .take(3)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        Err(SbxError::CommandFailed {
+            command: format!("install {names} in sandbox {name}"),
+            message: last_lines,
+        })
     }
 
     async fn run(&self, arguments: &[impl AsRef<OsStr>]) -> Result<Output, SbxError> {
@@ -559,8 +743,19 @@ fn runtime_records_dir() -> Option<PathBuf> {
     }
 }
 
+fn toolchain_install_script(toolchains: &[Toolchain]) -> String {
+    let mut script = String::from(TOOLCHAIN_SCRIPT_PRELUDE);
+    for toolchain in toolchains {
+        script.push_str(toolchain.install_script());
+        script.push('\n');
+    }
+    script
+}
+
 fn parse_probe(output: &str) -> SandboxProbe {
     let mut probe = SandboxProbe::default();
+    let mut used = std::collections::HashSet::new();
+    let mut installed = Vec::new();
     for line in output.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
@@ -599,9 +794,45 @@ fn parse_probe(output: &str) -> SandboxProbe {
                 });
             }
             "agent" if !value.is_empty() => probe.agents.push(value.to_string()),
+            "marker" => {
+                if let Some(toolchain) = Toolchain::for_marker(value) {
+                    used.insert(toolchain);
+                }
+            }
+            "toolchain" => {
+                if let Some((id, version)) = value.split_once('|')
+                    && let Some(toolchain) = Toolchain::from_id(id)
+                {
+                    let version = version.trim();
+                    installed.push((
+                        toolchain,
+                        if version.is_empty() {
+                            "installed"
+                        } else {
+                            version
+                        }
+                        .to_string(),
+                    ));
+                }
+            }
             _ => {}
         }
     }
+    probe.toolchains = Toolchain::ALL
+        .into_iter()
+        .filter_map(|toolchain| {
+            let version = installed
+                .iter()
+                .find(|(installed, _)| *installed == toolchain)
+                .map(|(_, version)| version.clone());
+            let used_by_project = used.contains(&toolchain);
+            (used_by_project || version.is_some()).then_some(ToolchainStatus {
+                toolchain,
+                used_by_project,
+                version,
+            })
+        })
+        .collect();
     probe.listening_ports.sort_unstable();
     probe.listening_ports.dedup();
     probe
@@ -742,6 +973,45 @@ mod tests {
         assert_eq!(probe.repositories[0].branch.as_deref(), Some("main"));
         assert_eq!(probe.repositories[1].remote, None);
         assert_eq!(probe.agents, vec!["claude".to_string()]);
+    }
+
+    #[test]
+    fn detects_toolchains() {
+        let probe = parse_probe(
+            "marker=go.mod\nmarker=pubspec.yaml\nmarker=requirements.txt\nmarker=App.csproj\n\
+             marker=README.md\ntoolchain=go|go1.27.3\ntoolchain=python|3.14.4\ntoolchain=node|v22.22.1\n",
+        );
+        let summary = probe
+            .toolchains
+            .iter()
+            .map(|status| {
+                (
+                    status.toolchain,
+                    status.used_by_project,
+                    status.version.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            vec![
+                (Toolchain::Go, true, Some("go1.27.3".to_string())),
+                (Toolchain::Python, true, Some("3.14.4".to_string())),
+                (Toolchain::Node, false, Some("v22.22.1".to_string())),
+                (Toolchain::Flutter, true, None),
+                (Toolchain::DotNet, true, None),
+            ]
+        );
+        let missing = probe
+            .toolchains
+            .iter()
+            .filter(|status| status.is_missing())
+            .map(|status| status.toolchain)
+            .collect::<Vec<_>>();
+        assert_eq!(missing, vec![Toolchain::Flutter, Toolchain::DotNet]);
+        let script = toolchain_install_script(&missing);
+        assert!(script.starts_with("set -e"));
+        assert!(script.contains("flutter.git") && script.contains("dotnet-sdk-10.0"));
     }
 
     #[test]

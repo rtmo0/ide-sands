@@ -15727,11 +15727,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "collections",
  "futures 0.3.34",
  "fuzzy_nucleo",
  "gpui",
  "menu",
  "picker",
+ "project",
  "recent_projects",
  "remote",
  "sbx",

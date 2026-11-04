@@ -15,11 +15,13 @@ doctest = false
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+collections.workspace = true
 futures.workspace = true
 fuzzy_nucleo.workspace = true
 gpui.workspace = true
 menu.workspace = true
 picker.workspace = true
+project.workspace = true
 recent_projects.workspace = true
 remote.workspace = true
 sbx.workspace = true
