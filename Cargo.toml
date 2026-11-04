@@ -189,6 +189,7 @@ members = [
     "crates/sandbox",
     "crates/sandbox_ui",
     "crates/sbx",
+    "crates/tree_sitter_dart",
     "crates/scheduler",
     "crates/schema_generator",
     "crates/search",
@@ -951,6 +952,7 @@ tree-sitter-bash = "0.25.1"
 tree-sitter-c = "0.24.1"
 tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev = "5cb9b693cfd7bfacab1d9ff4acac1a4150700609" }
 tree-sitter-css = "0.23"
+tree-sitter-dart = { path = "crates/tree_sitter_dart" }
 tree-sitter-diff = "0.1.0"
 tree-sitter-elixir = "0.3"
 tree-sitter-embedded-template = "0.23.0"

@@ -37,6 +37,13 @@ impl VsCodeDebugTaskDefinition {
             );
         }
         let adapter = task_type_to_adapter_name(&self.r#type, &config);
+        // Both adapters read `type` from the configuration: JavaScript to pick the runtime, Dart
+        // to choose between the Dart and the Flutter tool.
+        if let Some(config) = config.as_object_mut()
+            && adapter == "Dart"
+        {
+            config.insert("type".to_owned(), self.r#type.clone().into());
+        }
         if let Some(config) = config.as_object_mut()
             && adapter == "JavaScript"
         {
@@ -100,6 +107,7 @@ fn task_type_to_adapter_name(task_type: &str, config: &serde_json::Value) -> Str
         "cppdbg" | "gdb" => "GDB",
         "lldb" | "lldb-dap" | "codelldb" => "CodeLLDB",
         "debugpy" | "python" => "Debugpy",
+        "dart" | "flutter" => "Dart",
         "rdbg" => "rdbg",
         _ => task_type,
     }

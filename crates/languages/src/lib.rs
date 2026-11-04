@@ -20,6 +20,7 @@ mod bash;
 mod c;
 mod cpp;
 mod css;
+mod dart;
 mod eslint;
 mod go;
 mod html;
@@ -63,6 +64,7 @@ pub fn init(languages: Arc<LanguageRegistry>, fs: Arc<dyn Fs>, node: NodeRuntime
     let bash_lsp_adapter = Arc::new(bash::BashLspAdapter::new(node.clone()));
     let c_lsp_adapter = Arc::new(c::CLspAdapter);
     let css_lsp_adapter = Arc::new(css::CssLspAdapter::new(node.clone()));
+    let dart_lsp_adapter = Arc::new(dart::DartLspAdapter);
     let html_lsp_adapter = Arc::new(html::HtmlLspAdapter::new(node.clone()));
     let eslint_adapter = Arc::new(eslint::EsLintLspAdapter::new(node.clone(), fs.clone()));
     let go_context_provider = Arc::new(go::GoContextProvider);
@@ -111,6 +113,11 @@ pub fn init(languages: Arc<LanguageRegistry>, fs: Arc<dyn Fs>, node: NodeRuntime
         LanguageInfo {
             name: "css",
             adapters: vec![css_lsp_adapter],
+            ..Default::default()
+        },
+        LanguageInfo {
+            name: "dart",
+            adapters: vec![dart_lsp_adapter],
             ..Default::default()
         },
         LanguageInfo {

@@ -1,4 +1,5 @@
 mod codelldb;
+mod dart;
 mod gdb;
 mod go;
 mod javascript;
@@ -18,6 +19,7 @@ use dap::{
     },
     configure_tcp_connection,
 };
+use dart::DartDebugAdapter;
 use gdb::GdbDebugAdapter;
 use go::GoDebugAdapter;
 use gpui::{App, BorrowAppContext};
@@ -33,6 +35,7 @@ pub fn init(cx: &mut App) {
         registry.add_adapter(Arc::from(JsDebugAdapter::default()));
         registry.add_adapter(Arc::from(GoDebugAdapter::default()));
         registry.add_adapter(Arc::from(GdbDebugAdapter));
+        registry.add_adapter(Arc::from(DartDebugAdapter));
 
         #[cfg(any(test, feature = "test-support"))]
         {

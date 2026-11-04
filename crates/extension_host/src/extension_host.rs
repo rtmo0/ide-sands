@@ -109,6 +109,7 @@ async fn with_remote_sync_timeout<T>(
 static SUPPRESSED_EXTENSIONS: LazyLock<FxHashSet<&str>> = LazyLock::new(|| {
     FxHashSet::from_iter([
         // Built into Sands.
+        "dart",
         "html",
         "snippets",
         "ruff",
