@@ -22,8 +22,10 @@ use workspace::{
 
 mod new_project_modal;
 mod projects_panel;
+mod sandbox_panel;
 
 pub use projects_panel::ProjectsPanel;
+pub use sandbox_panel::SandboxPanel;
 
 actions!(
     sands,
@@ -40,6 +42,7 @@ pub fn init(cx: &mut App) {
         });
     });
     projects_panel::init(cx);
+    sandbox_panel::init(cx);
 }
 
 /// Checks that `sbx` is usable before listing, so failures name the actual problem.

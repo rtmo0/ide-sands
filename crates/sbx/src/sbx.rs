@@ -106,6 +106,101 @@ struct LifecycleResult {
     error: Option<String>,
 }
 
+/// Hosts a sandbox reached through the proxy, aggregated by host.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct NetworkLog {
+    #[serde(default)]
+    pub allowed: Vec<NetworkActivity>,
+    #[serde(default)]
+    pub blocked: Vec<NetworkActivity>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct NetworkActivity {
+    pub host: String,
+    #[serde(default)]
+    pub count: u64,
+    #[serde(default)]
+    pub first_seen: Option<String>,
+    #[serde(default)]
+    pub last_seen: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct PolicyRules {
+    #[serde(default)]
+    pub rules: Vec<PolicyRule>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PolicyRule {
+    pub id: String,
+    pub decision: String,
+    pub resource_type: String,
+    #[serde(default)]
+    pub resources: Vec<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// Resource limits a sandbox was created with. `None` means the `sbx` default
+/// (all host CPUs, half of the host memory).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfiguredResources {
+    pub cpus: Option<u32>,
+    pub memory: Option<String>,
+    pub docker_disk: Option<String>,
+}
+
+/// What a sandbox looks like from the inside, collected with a single `exec`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SandboxProbe {
+    pub cpus: Option<u32>,
+    pub memory_total_bytes: Option<u64>,
+    pub memory_available_bytes: Option<u64>,
+    pub disk_total_bytes: Option<u64>,
+    pub disk_used_bytes: Option<u64>,
+    pub load_average: Option<String>,
+    /// TCP ports something listens on inside the sandbox, sorted and deduplicated.
+    pub listening_ports: Vec<u16>,
+    pub repositories: Vec<SandboxRepository>,
+    /// Agent CLIs found on the sandbox `PATH`.
+    pub agents: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SandboxRepository {
+    pub path: String,
+    pub branch: Option<String>,
+    pub remote: Option<String>,
+}
+
+/// Agent CLIs Sands looks for inside sandboxes.
+pub const KNOWN_AGENT_COMMANDS: [&str; 7] = [
+    "claude",
+    "codex",
+    "gemini",
+    "opencode",
+    "copilot",
+    "cursor-agent",
+    "kiro",
+];
+
+const PROBE_SCRIPT: &str = r#"
+echo "cpus=$(nproc)"
+awk '/^MemTotal:/ {print "memory_total_kb=" $2} /^MemAvailable:/ {print "memory_available_kb=" $2}' /proc/meminfo
+df -B1 --output=size,used / | tail -n 1 | awk '{print "disk_total=" $1; print "disk_used=" $2}'
+echo "load=$(cut -d ' ' -f 1-3 /proc/loadavg)"
+cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '$4 == "0A" {split($2, address, ":"); print "listen=" address[2]}'
+find "$PWD" -maxdepth 3 -name .git -prune 2>/dev/null | while read -r git_dir; do
+  repository=$(dirname "$git_dir")
+  echo "repository=$repository|$(git -C "$repository" rev-parse --abbrev-ref HEAD 2>/dev/null)|$(git -C "$repository" remote get-url origin 2>/dev/null)"
+done
+for agent in AGENTS; do command -v "$agent" >/dev/null 2>&1 && echo "agent=$agent"; done
+"#;
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct DiagnoseReport {
     pub checks: Vec<DiagnoseCheck>,
@@ -353,6 +448,32 @@ impl Sbx {
         Ok(())
     }
 
+    /// Hosts the sandbox reached through the proxy, most recent first as reported by `sbx`.
+    pub async fn network_log(&self, name: &str, limit: usize) -> Result<NetworkLog, SbxError> {
+        let limit = limit.to_string();
+        self.run_json(&["policy", "log", name, "--json", "--limit", &limit])
+            .await
+    }
+
+    /// Network and filesystem rules that apply to the sandbox, global ones included.
+    pub async fn policy_rules(&self, name: &str) -> Result<PolicyRules, SbxError> {
+        self.run_json(&["policy", "ls", name, "--json"]).await
+    }
+
+    /// Collects resources, listening ports, repositories and agents from inside the sandbox.
+    /// Starts the sandbox if it is stopped.
+    pub async fn probe(&self, name: &str) -> Result<SandboxProbe, SbxError> {
+        let script = PROBE_SCRIPT.replace("AGENTS", &KNOWN_AGENT_COMMANDS.join(" "));
+        let output = self.exec(name, &["sh", "-c", script.as_str()]).await?;
+        if !output.status.success() && output.stdout.is_empty() {
+            return Err(classify_failure(
+                &display_command(&["exec", name, "sh"]),
+                &output.stderr,
+            ));
+        }
+        Ok(parse_probe(&String::from_utf8_lossy(&output.stdout)))
+    }
+
     async fn run(&self, arguments: &[impl AsRef<OsStr>]) -> Result<Output, SbxError> {
         new_command(&self.executable)
             .args(arguments)
@@ -397,6 +518,93 @@ impl Sbx {
             None => Err(classify_failure(&command, &output.stderr)),
         }
     }
+}
+
+/// Reads the limits a sandbox was created with from the `sbx` daemon's runtime record. The
+/// record is internal to `sbx` 0.50, so a missing or changed file yields `None` rather than an
+/// error.
+pub fn configured_resources(sandbox_name: &str) -> Option<ConfiguredResources> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct RuntimeRecord {
+        spec: RuntimeSpec,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct RuntimeSpec {
+        #[serde(default, rename = "CPUs")]
+        cpus: u32,
+        #[serde(default)]
+        memory: String,
+        #[serde(default)]
+        din_d_volume_size: String,
+    }
+
+    let path = runtime_records_dir()?.join(format!("{sandbox_name}.json"));
+    let contents = std::fs::read(path).ok()?;
+    let record: RuntimeRecord = serde_json::from_slice(&contents).ok()?;
+    let non_empty = |value: String| (!value.is_empty()).then_some(value);
+    Some(ConfiguredResources {
+        cpus: (record.spec.cpus > 0).then_some(record.spec.cpus),
+        memory: non_empty(record.spec.memory),
+        docker_disk: non_empty(record.spec.din_d_volume_size),
+    })
+}
+
+fn runtime_records_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        Some(dirs::data_dir()?.join("com.docker.sandboxes/sandboxes/sandboxd/runtimes"))
+    } else {
+        None
+    }
+}
+
+fn parse_probe(output: &str) -> SandboxProbe {
+    let mut probe = SandboxProbe::default();
+    for line in output.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+        match key {
+            "cpus" => probe.cpus = value.parse().ok(),
+            "memory_total_kb" => {
+                probe.memory_total_bytes = value.parse::<u64>().ok().map(|kb| kb * 1024)
+            }
+            "memory_available_kb" => {
+                probe.memory_available_bytes = value.parse::<u64>().ok().map(|kb| kb * 1024)
+            }
+            "disk_total" => probe.disk_total_bytes = value.parse().ok(),
+            "disk_used" => probe.disk_used_bytes = value.parse().ok(),
+            "load" if !value.is_empty() => probe.load_average = Some(value.to_string()),
+            "listen" => {
+                if let Ok(port) = u16::from_str_radix(value, 16) {
+                    probe.listening_ports.push(port);
+                }
+            }
+            "repository" => {
+                let mut parts = value.splitn(3, '|');
+                let Some(path) = parts.next().filter(|path| !path.is_empty()) else {
+                    continue;
+                };
+                let non_empty = |part: Option<&str>| {
+                    part.map(str::trim)
+                        .filter(|part| !part.is_empty())
+                        .map(str::to_string)
+                };
+                probe.repositories.push(SandboxRepository {
+                    path: path.to_string(),
+                    branch: non_empty(parts.next()),
+                    remote: non_empty(parts.next()),
+                });
+            }
+            "agent" if !value.is_empty() => probe.agents.push(value.to_string()),
+            _ => {}
+        }
+    }
+    probe.listening_ports.sort_unstable();
+    probe.listening_ports.dedup();
+    probe
 }
 
 pub fn ensure_supported_version(version: &str) -> Result<(), SbxError> {
@@ -515,6 +723,45 @@ mod tests {
     use super::*;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn parses_probe_output() {
+        let probe = parse_probe(
+            "cpus=14\nmemory_total_kb=12417584\nmemory_available_kb=12030432\n\
+             disk_total=20957446144\ndisk_used=45277184\nload=0.10 0.05 0.01\n\
+             listen=1F90\nlisten=0016\nlisten=1F90\n\
+             repository=/work/t.project|main|https://github.com/rtmo0/t.project.git\n\
+             repository=/work/t.project/vendor/lib||\nagent=claude\nnoise\n",
+        );
+        assert_eq!(probe.cpus, Some(14));
+        assert_eq!(probe.memory_total_bytes, Some(12417584 * 1024));
+        assert_eq!(probe.disk_used_bytes, Some(45277184));
+        assert_eq!(probe.load_average.as_deref(), Some("0.10 0.05 0.01"));
+        assert_eq!(probe.listening_ports, vec![22, 8080]);
+        assert_eq!(probe.repositories.len(), 2);
+        assert_eq!(probe.repositories[0].branch.as_deref(), Some("main"));
+        assert_eq!(probe.repositories[1].remote, None);
+        assert_eq!(probe.agents, vec!["claude".to_string()]);
+    }
+
+    #[test]
+    fn parses_network_log_and_policy_rules() -> TestResult {
+        let log: NetworkLog = parse_json(
+            "sbx policy log",
+            br#"{"allowed": [{"sandbox_id": "t", "host": "api.anthropic.com:443", "proxy_type": "forward",
+                 "count": 3, "first_seen": "2026-11-04T10:58:42+03:00", "last_seen": "2026-11-04T11:00:00+03:00"}],
+                 "blocked": []}"#,
+        )?;
+        assert_eq!(log.allowed[0].host, "api.anthropic.com:443");
+        assert_eq!(log.allowed[0].count, 3);
+        let rules: PolicyRules = parse_json(
+            "sbx policy ls",
+            br#"{"rules": [{"id": "default-allow-all", "decision": "allow", "resource_type": "network",
+                 "resources": ["**"], "scope": "global", "status": "active", "editable": true}]}"#,
+        )?;
+        assert_eq!(rules.rules[0].resources, vec!["**".to_string()]);
+        Ok(())
+    }
 
     #[test]
     fn parses_version() -> TestResult {

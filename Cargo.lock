@@ -15726,6 +15726,8 @@ name = "sandbox_ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "futures 0.3.34",
  "fuzzy_nucleo",
  "gpui",
  "menu",
@@ -15954,6 +15956,7 @@ dependencies = [
 name = "sbx"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "semver",
  "serde",
  "serde_json",

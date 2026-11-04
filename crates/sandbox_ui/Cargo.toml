@@ -14,6 +14,8 @@ doctest = false
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
+futures.workspace = true
 fuzzy_nucleo.workspace = true
 gpui.workspace = true
 menu.workspace = true
