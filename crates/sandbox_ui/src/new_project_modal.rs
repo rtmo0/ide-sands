@@ -34,7 +34,7 @@ enum ProjectSource {
 
 enum CreationState {
     Editing,
-    Creating,
+    Creating(SharedString),
     Failed(SharedString),
 }
 
@@ -113,7 +113,7 @@ impl NewProjectModal {
     }
 
     fn create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.state, CreationState::Creating) {
+        if matches!(self.state, CreationState::Creating(_)) {
             return;
         }
         let source = match self.source_kind {
@@ -133,7 +133,7 @@ impl NewProjectModal {
             }
         };
 
-        self.state = CreationState::Creating;
+        self.state = CreationState::Creating("Creating the sandbox and fetching the code…".into());
         cx.notify();
         self._task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -141,6 +141,7 @@ impl NewProjectModal {
                 .await;
             match result {
                 Ok(directory) => {
+                    set_up_toolchains(&this, &name, cx).await;
                     this.update_in(cx, |this, window, cx| {
                         if let Some(workspace) = this.workspace.upgrade()
                             && let Some(panel) = workspace.read(cx).panel::<ProjectsPanel>(cx)
@@ -162,7 +163,58 @@ impl NewProjectModal {
             }
         }));
     }
+}
 
+/// Installs the toolchains the project's files call for. A failure does not block opening the
+/// project: the Sandbox panel lists what is missing and can retry.
+async fn set_up_toolchains(
+    this: &WeakEntity<NewProjectModal>,
+    name: &str,
+    cx: &mut gpui::AsyncWindowContext,
+) {
+    let probe_name = name.to_string();
+    let missing = cx
+        .background_spawn(async move {
+            let sbx = Sbx::locate()?;
+            let probe = sbx.probe(&probe_name).await?;
+            anyhow::Ok(
+                probe
+                    .toolchains
+                    .into_iter()
+                    .filter(|status| status.is_missing())
+                    .map(|status| status.toolchain)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .await
+        .log_err()
+        .unwrap_or_default();
+    if missing.is_empty() {
+        return;
+    }
+    let names = missing
+        .iter()
+        .map(|toolchain| toolchain.display_name())
+        .collect::<Vec<_>>()
+        .join(", ");
+    this.update(cx, |this, cx| {
+        this.state = CreationState::Creating(
+            format!("Installing {names}. This can take a few minutes…").into(),
+        );
+        cx.notify();
+    })
+    .log_err();
+    let install_name = name.to_string();
+    cx.background_spawn(async move {
+        let sbx = Sbx::locate()?;
+        sbx.install_toolchains(&install_name, &missing).await?;
+        anyhow::Ok(())
+    })
+    .await
+    .log_err();
+}
+
+impl NewProjectModal {
     fn cancel(&mut self, _: &menu::Cancel, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(DismissEvent);
     }
@@ -352,11 +404,11 @@ impl Focusable for NewProjectModal {
 
 impl Render for NewProjectModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let creating = matches!(self.state, CreationState::Creating);
+        let creating = matches!(self.state, CreationState::Creating(_));
         let status = match &self.state {
             CreationState::Editing => None,
-            CreationState::Creating => Some(
-                Label::new("Creating the sandbox and fetching the code…")
+            CreationState::Creating(message) => Some(
+                Label::new(message.clone())
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             ),

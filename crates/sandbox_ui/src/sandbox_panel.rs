@@ -79,6 +79,7 @@ pub struct SandboxPanel {
     active: bool,
     port_input: Entity<InputField>,
     action_error: Option<SharedString>,
+    installing_toolchains: bool,
     _refresh: Task<()>,
     _action: Task<()>,
 }
@@ -100,6 +101,7 @@ impl SandboxPanel {
                     active: false,
                     port_input,
                     action_error: None,
+                    installing_toolchains: false,
                     _refresh: Task::ready(()),
                     _action: Task::ready(()),
                 };
@@ -177,6 +179,7 @@ impl SandboxPanel {
                 if let Err(error) = result {
                     this.action_error = Some(error.to_string().into());
                 }
+                this.installing_toolchains = false;
                 this.schedule_refresh(window, cx);
                 cx.notify();
             })
@@ -316,6 +319,7 @@ impl SandboxPanel {
             PanelState::Loaded(snapshot) => snapshot,
         };
         let ports = self.render_ports(snapshot, cx);
+        let toolchains = self.render_toolchains(snapshot, cx);
 
         v_flex()
             .p_3()
@@ -329,6 +333,7 @@ impl SandboxPanel {
                 render_resources(snapshot, cx),
                 cx,
             ))
+            .child(section("Toolchains", IconName::ToolHammer, toolchains, cx))
             .child(section(
                 "Repositories",
                 IconName::GitBranch,
@@ -348,6 +353,82 @@ impl SandboxPanel {
                 render_network(snapshot),
                 cx,
             ))
+            .into_any_element()
+    }
+
+    fn install_missing_toolchains(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let PanelState::Loaded(snapshot) = &self.state else {
+            return;
+        };
+        let missing = missing_toolchains(snapshot);
+        if missing.is_empty() || self.installing_toolchains {
+            return;
+        }
+        self.installing_toolchains = true;
+        self.run_sbx_action(
+            move |sbx, name| async move { sbx.install_toolchains(&name, &missing).await },
+            window,
+            cx,
+        );
+    }
+
+    fn render_toolchains(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
+        let Some(probe) = &snapshot.probe else {
+            return muted("Start the sandbox to see its toolchains.").into_any_element();
+        };
+        let missing = missing_toolchains(snapshot);
+        let install_label = if self.installing_toolchains {
+            "Installing… this can take a few minutes".to_string()
+        } else {
+            format!(
+                "Install {}",
+                missing
+                    .iter()
+                    .map(|toolchain| toolchain.display_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+
+        v_flex()
+            .gap_1()
+            .when(probe.toolchains.is_empty(), |this| {
+                this.child(muted("No toolchains detected."))
+            })
+            .children(probe.toolchains.iter().map(|status| {
+                let version = match &status.version {
+                    Some(version) => muted(version.clone()),
+                    None => Label::new("missing")
+                        .size(LabelSize::Small)
+                        .color(Color::Error),
+                };
+                row()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Indicator::dot().color(if status.version.is_some() {
+                                Color::Success
+                            } else {
+                                Color::Error
+                            }))
+                            .child(Label::new(status.toolchain.display_name()))
+                            .when(!status.used_by_project, |this| {
+                                this.child(muted("not used by the project"))
+                            }),
+                    )
+                    .child(version)
+            }))
+            .when(!missing.is_empty() || self.installing_toolchains, |this| {
+                this.child(
+                    Button::new("install-toolchains", install_label)
+                        .style(ButtonStyle::Filled)
+                        .full_width()
+                        .disabled(self.installing_toolchains)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.install_missing_toolchains(window, cx)
+                        })),
+                )
+            })
             .into_any_element()
     }
 
@@ -461,6 +542,16 @@ impl SandboxPanel {
             )
             .into_any_element()
     }
+}
+
+fn missing_toolchains(snapshot: &Snapshot) -> Vec<sbx::Toolchain> {
+    snapshot
+        .probe
+        .iter()
+        .flat_map(|probe| &probe.toolchains)
+        .filter(|status| status.is_missing())
+        .map(|status| status.toolchain)
+        .collect()
 }
 
 async fn load_snapshot(name: String) -> anyhow::Result<Snapshot> {
