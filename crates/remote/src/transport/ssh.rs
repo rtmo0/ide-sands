@@ -1435,7 +1435,16 @@ impl SshRemoteConnection {
         log::debug!("uploading file {:?} to {:?}", src_path, dest_path);
 
         let src_path_display = src_path.display().to_string();
-        let dest_path_str = dest_path.display(self.path_style());
+        let relative_dest = dest_path.display(self.path_style());
+        // SFTP and SCP sessions do not always start in the home directory (Docker Sandboxes start
+        // them in the sandbox workspace), while commands over SSH resolve `.zed_server` against
+        // home. Upload to the same absolute location when the home directory is known.
+        let dest_path_str = match (&self.ssh_home_dir, self.path_style()) {
+            (Some(home), PathStyle::Unix) => {
+                format!("{}/{relative_dest}", home.trim_end_matches('/'))
+            }
+            _ => relative_dest.into_owned(),
+        };
 
         // We will try SFTP first, and if that fails, we will fall back to SCP.
         // If SCP fails also, we give up and return an error.
