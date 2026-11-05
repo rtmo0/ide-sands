@@ -1095,7 +1095,15 @@ debug = "full"
 
 [profile.dev.package]
 # proc-macros start
+# The dbg profile is meant for stepping into anything, so it keeps the debug
+# info that profile.dev drops for third-party crates.
+[profile.dbg.package."*"]
+debug = "full"
+
 gpui_macros = { opt-level = 3 }
+# Third-party crates are rarely stepped into, and their debug info is most of
+# target/debug. "*" does not match workspace members, which keep it.
+"*" = { debug = false }
 derive_refineable = { opt-level = 3 }
 feature_flags_macros = { opt-level = 3 }
 settings_macros = { opt-level = 3 }
