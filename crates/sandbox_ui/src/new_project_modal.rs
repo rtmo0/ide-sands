@@ -16,22 +16,9 @@ use ui_input::InputField;
 use util::ResultExt as _;
 use workspace::{ModalView, OpenMode, Workspace};
 
-use crate::{open_sandbox, projects_panel::ProjectsPanel, sandbox_panel::parse_port_mapping};
-
-/// Built-in `sbx` agents, by the name `sbx create` takes and the name shown to the user.
-const AGENTS: [(&str, &str); 11] = [
-    ("shell", "No agent (shell only)"),
-    ("claude", "Claude Code"),
-    ("codex", "Codex"),
-    ("copilot", "GitHub Copilot"),
-    ("cursor", "Cursor"),
-    ("gemini", "Gemini CLI"),
-    ("opencode", "OpenCode"),
-    ("kiro", "Kiro"),
-    ("devin", "Devin"),
-    ("droid", "Droid"),
-    ("docker-agent", "Docker Agent"),
-];
+use crate::{
+    AGENTS, open_sandbox, projects_panel::ProjectsPanel, sandbox_panel::parse_port_mapping,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Step {
@@ -822,7 +809,9 @@ impl NewProjectModal {
                                     .min_w_0()
                                     .child(Label::new(source.display()).truncate())
                                     .when(Some(index) == primary, |this| {
-                                        this.child(hint("Sandbox workspace"))
+                                        this.child(hint(
+                                            "Main repository: its commits reach the host",
+                                        ))
                                     }),
                             )
                             .end_slot(

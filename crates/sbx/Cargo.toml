@@ -13,7 +13,9 @@ path = "src/sbx.rs"
 doctest = false
 
 [dependencies]
+base64.workspace = true
 dirs.workspace = true
+futures.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true

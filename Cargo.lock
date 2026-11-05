@@ -9401,12 +9401,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "dirs",
+ "futures 0.3.34",
  "paths",
  "sbx",
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "smol",
  "tempfile",
  "url",
 ]
@@ -15746,10 +15749,12 @@ dependencies = [
  "anyhow",
  "chrono",
  "collections",
+ "editor",
  "futures 0.3.34",
  "fuzzy_nucleo",
  "gpui",
  "kubernetes",
+ "language",
  "menu",
  "picker",
  "project",
@@ -15978,7 +15983,9 @@ dependencies = [
 name = "sbx"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dirs",
+ "futures 0.3.34",
  "semver",
  "serde",
  "serde_json",

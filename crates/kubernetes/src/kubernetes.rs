@@ -5,15 +5,37 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, bail};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use sbx::{NetworkDecision, Sbx};
+
+mod cluster;
+mod details;
+mod overview;
+mod resources;
+mod table;
+
+pub use cluster::{
+    Cluster, ContextInfo, HelmRelease, Listing, MANIFEST_DIRECTORY, Revision, Usage, shell_quote,
+};
+pub use details::{
+    Condition, ContainerInfo, DataEntry, Details, EventRow, KeyValue, Section, ServicePort,
+    UsageRow, build_details, build_helm_details,
+};
+pub use overview::{Overview, ResourceTotals, Warning, WorkloadSummary, build_overview};
+pub use resources::{
+    Category, HELM_RELEASES, ObjectRef, ResourceKind, builtin_kind, builtin_kinds, kind_for,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
+pub use table::{
+    Action, Cell, Column, Resource, Row, Table, TableContext, Tone, build_table, format_age,
+    format_bytes, format_cpu, parse_quantity,
+};
 use tempfile::NamedTempFile;
 use url::Url;
 
@@ -26,6 +48,9 @@ if ! command -v kubectl >/dev/null 2>&1; then
   curl -fsSL "https://dl.k8s.io/release/$kubectl_version/bin/linux/$kubectl_arch/kubectl" -o /tmp/sands-kubectl
   sudo install -m 0755 /tmp/sands-kubectl /usr/local/bin/kubectl
   rm -f /tmp/sands-kubectl
+fi
+if ! command -v helm >/dev/null 2>&1; then
+  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash >/dev/null
 fi
 mkdir -p "$HOME/.kube"
 chmod 700 "$HOME/.kube"
@@ -71,117 +96,6 @@ pub struct KubernetesOverview {
     pub total_pods: Option<usize>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ResourceKind {
-    Pod,
-    Deployment,
-    StatefulSet,
-    DaemonSet,
-    Job,
-    CronJob,
-    Service,
-    Ingress,
-    ConfigMap,
-    Secret,
-    PersistentVolumeClaim,
-    Node,
-    Namespace,
-    Event,
-}
-
-impl ResourceKind {
-    pub const ALL: [Self; 14] = [
-        Self::Pod,
-        Self::Deployment,
-        Self::StatefulSet,
-        Self::DaemonSet,
-        Self::Job,
-        Self::CronJob,
-        Self::Service,
-        Self::Ingress,
-        Self::ConfigMap,
-        Self::Secret,
-        Self::PersistentVolumeClaim,
-        Self::Node,
-        Self::Namespace,
-        Self::Event,
-    ];
-
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Self::Pod => "Pods",
-            Self::Deployment => "Deployments",
-            Self::StatefulSet => "StatefulSets",
-            Self::DaemonSet => "DaemonSets",
-            Self::Job => "Jobs",
-            Self::CronJob => "CronJobs",
-            Self::Service => "Services",
-            Self::Ingress => "Ingresses",
-            Self::ConfigMap => "ConfigMaps",
-            Self::Secret => "Secrets",
-            Self::PersistentVolumeClaim => "PersistentVolumeClaims",
-            Self::Node => "Nodes",
-            Self::Namespace => "Namespaces",
-            Self::Event => "Events",
-        }
-    }
-
-    pub fn resource_name(self) -> &'static str {
-        match self {
-            Self::Pod => "pods",
-            Self::Deployment => "deployments",
-            Self::StatefulSet => "statefulsets",
-            Self::DaemonSet => "daemonsets",
-            Self::Job => "jobs",
-            Self::CronJob => "cronjobs",
-            Self::Service => "services",
-            Self::Ingress => "ingresses",
-            Self::ConfigMap => "configmaps",
-            Self::Secret => "secrets",
-            Self::PersistentVolumeClaim => "persistentvolumeclaims",
-            Self::Node => "nodes",
-            Self::Namespace => "namespaces",
-            Self::Event => "events",
-        }
-    }
-
-    pub fn is_namespaced(self) -> bool {
-        !matches!(self, Self::Node | Self::Namespace)
-    }
-
-    pub fn supports_logs(self) -> bool {
-        matches!(
-            self,
-            Self::Pod | Self::Deployment | Self::StatefulSet | Self::DaemonSet | Self::Job
-        )
-    }
-
-    pub fn supports_restart(self) -> bool {
-        matches!(self, Self::Deployment | Self::StatefulSet | Self::DaemonSet)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResourceSummary {
-    pub kind: ResourceKind,
-    pub namespace: Option<String>,
-    pub name: String,
-    pub status: String,
-    pub ready: Option<String>,
-    pub restarts: Option<u64>,
-    pub created_at: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HelmRelease {
-    pub name: String,
-    pub namespace: String,
-    pub revision: String,
-    pub status: String,
-    pub chart: String,
-    pub app_version: String,
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Kubeconfig {
@@ -204,12 +118,12 @@ struct Kubeconfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct NamedCluster {
     name: String,
-    cluster: Cluster,
+    cluster: KubeconfigCluster,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-struct Cluster {
+struct KubeconfigCluster {
     server: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     certificate_authority: Option<String>,
@@ -409,7 +323,15 @@ impl PreparedConnection {
         let output = sbx
             .exec(sandbox_name, &["bash", "-lc", KUBECTL_INSTALL_SCRIPT])
             .await?;
-        ensure_success("install kubectl", output)?;
+        if !output.status.success() {
+            bail!(
+                "installing kubectl failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+                    .unwrap_or("no error output")
+            );
+        }
         probe(sbx, sandbox_name)
             .await?
             .context("the Kubernetes connection was not created")?;
@@ -517,7 +439,10 @@ async fn current_placeholder(sbx: &Sbx, sandbox_name: &str) -> Result<Option<Str
         .map(str::to_string))
 }
 
-fn inline_certificate_authority(cluster: &mut Cluster, base_directory: &Path) -> Result<()> {
+fn inline_certificate_authority(
+    cluster: &mut KubeconfigCluster,
+    base_directory: &Path,
+) -> Result<()> {
     let Some(path) = cluster.certificate_authority.take() else {
         return Ok(());
     };
@@ -577,428 +502,51 @@ fn resolve_path(base_directory: &Path, path: &str) -> PathBuf {
     }
 }
 
+/// A short summary of the sandbox's Kubernetes connection, or `None` without one.
 pub async fn probe(sbx: &Sbx, sandbox_name: &str) -> Result<Option<KubernetesOverview>> {
-    let context_output = sbx
-        .exec(sandbox_name, &["kubectl", "config", "current-context"])
-        .await?;
-    if !context_output.status.success() {
+    let cluster = Cluster::new(sbx.clone(), sandbox_name);
+    let Some(context) = cluster.context().await? else {
         return Ok(None);
-    }
-    let context = String::from_utf8_lossy(&context_output.stdout)
-        .trim()
-        .to_string();
-    if context.is_empty() {
-        return Ok(None);
-    }
-
-    let configuration = kubectl_json(
-        sbx,
-        sandbox_name,
-        &["config", "view", "--minify", "-o", "json"],
-    )
-    .await?;
-    let server = configuration
-        .pointer("/clusters/0/cluster/server")
-        .and_then(JsonValue::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let namespace = configuration
-        .pointer("/contexts/0/context/namespace")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("default")
-        .to_string();
-    let version = kubectl_json(sbx, sandbox_name, &["version", "-o", "json"])
-        .await?
-        .pointer("/serverVersion/gitVersion")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("unknown")
-        .to_string();
-    let nodes = kubectl_json_if_allowed(sbx, sandbox_name, &["get", "nodes", "-o", "json"]).await?;
-    let pods =
-        match kubectl_json_if_allowed(sbx, sandbox_name, &["get", "pods", "-A", "-o", "json"])
-            .await?
-        {
-            Some(pods) => Some(pods),
-            None => {
-                kubectl_json_if_allowed(sbx, sandbox_name, &["get", "pods", "-o", "json"]).await?
-            }
-        };
-    let node_items = nodes
-        .as_ref()
-        .and_then(|nodes| nodes.get("items"))
-        .and_then(JsonValue::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    let pod_items = pods
-        .as_ref()
-        .and_then(|pods| pods.get("items"))
-        .and_then(JsonValue::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    let ready_nodes = node_items
-        .iter()
-        .filter(|node| {
-            node.pointer("/status/conditions")
-                .and_then(JsonValue::as_array)
-                .is_some_and(|conditions| {
-                    conditions.iter().any(|condition| {
-                        condition.get("type").and_then(JsonValue::as_str) == Some("Ready")
-                            && condition.get("status").and_then(JsonValue::as_str) == Some("True")
-                    })
-                })
+    };
+    let commands = [
+        vec!["version", "-o", "json"],
+        vec!["get", "nodes", "-o", "json"],
+        vec!["get", "pods", "--all-namespaces", "-o", "json"],
+    ]
+    .map(|command| command.into_iter().map(str::to_string).collect::<Vec<_>>());
+    let outputs = cluster.kubectl_batch(&commands).await?;
+    let output = |index: usize| outputs.get(index).filter(|output| output.success());
+    let version = output(0)
+        .and_then(|output| serde_json::from_slice::<JsonValue>(&output.stdout).ok())
+        .and_then(|version| {
+            version
+                .pointer("/serverVersion/gitVersion")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
         })
-        .count();
-    let running_pods = pod_items
-        .iter()
-        .filter(|pod| pod.pointer("/status/phase").and_then(JsonValue::as_str) == Some("Running"))
-        .count();
+        .unwrap_or_else(|| "unknown".to_string());
+    let nodes = output(1).map(cluster::parse_list_output);
+    let pods = output(2).map(cluster::parse_list_output);
     Ok(Some(KubernetesOverview {
-        context,
-        server,
-        namespace,
+        context: context.context,
+        server: context.server,
+        namespace: context.namespace,
         version,
-        ready_nodes,
-        total_nodes: nodes.as_ref().map(|_| node_items.len()),
-        running_pods,
-        total_pods: pods.as_ref().map(|_| pod_items.len()),
-    }))
-}
-
-pub async fn list_resources(
-    sbx: &Sbx,
-    sandbox_name: &str,
-    kind: ResourceKind,
-    namespace: Option<&str>,
-) -> Result<Vec<ResourceSummary>> {
-    let mut arguments = vec!["get", kind.resource_name()];
-    if kind.is_namespaced() {
-        match namespace.filter(|namespace| !namespace.is_empty()) {
-            Some(namespace) => arguments.extend(["--namespace", namespace]),
-            None => arguments.push("--all-namespaces"),
-        }
-    }
-    arguments.extend(["-o", "json"]);
-    let resources = kubectl_json(sbx, sandbox_name, &arguments).await?;
-    Ok(resources
-        .get("items")
-        .and_then(JsonValue::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|resource| resource_summary(kind, resource))
-        .collect())
-}
-
-pub async fn resource_yaml(
-    sbx: &Sbx,
-    sandbox_name: &str,
-    resource: &ResourceSummary,
-) -> Result<String> {
-    let mut arguments = vec!["get", resource.kind.resource_name(), resource.name.as_str()];
-    if let Some(namespace) = resource.namespace.as_deref() {
-        arguments.extend(["--namespace", namespace]);
-    }
-    arguments.extend(["-o", "yaml"]);
-    let mut command = vec!["kubectl"];
-    command.extend(arguments);
-    let output = sbx.exec(sandbox_name, &command).await?;
-    let output = ensure_success("kubectl get resource", output)?;
-    String::from_utf8(output.stdout).context("kubectl returned non-UTF-8 YAML")
-}
-
-pub async fn delete_resource(
-    sbx: &Sbx,
-    sandbox_name: &str,
-    resource: &ResourceSummary,
-) -> Result<()> {
-    let mut command = vec![
-        "kubectl",
-        "delete",
-        resource.kind.resource_name(),
-        resource.name.as_str(),
-    ];
-    if let Some(namespace) = resource.namespace.as_deref() {
-        command.extend(["--namespace", namespace]);
-    }
-    let output = sbx.exec(sandbox_name, &command).await?;
-    ensure_success("kubectl delete resource", output).map(|_| ())
-}
-
-pub async fn restart_resource(
-    sbx: &Sbx,
-    sandbox_name: &str,
-    resource: &ResourceSummary,
-) -> Result<()> {
-    if !resource.kind.supports_restart() {
-        bail!("{} cannot be restarted", resource.kind.display_name());
-    }
-    let mut command = vec![
-        "kubectl",
-        "rollout",
-        "restart",
-        resource.kind.resource_name(),
-        resource.name.as_str(),
-    ];
-    if let Some(namespace) = resource.namespace.as_deref() {
-        command.extend(["--namespace", namespace]);
-    }
-    let output = sbx.exec(sandbox_name, &command).await?;
-    ensure_success("kubectl rollout restart", output).map(|_| ())
-}
-
-pub async fn helm_releases(sbx: &Sbx, sandbox_name: &str) -> Result<Option<Vec<HelmRelease>>> {
-    let output = sbx
-        .exec(
-            sandbox_name,
-            &["helm", "list", "--all-namespaces", "-o", "json"],
-        )
-        .await?;
-    if !output.status.success()
-        && String::from_utf8_lossy(&output.stderr).contains("executable file not found")
-    {
-        return Ok(None);
-    }
-    let output = ensure_success("helm list", output)?;
-    let releases: Vec<JsonValue> =
-        serde_json::from_slice(&output.stdout).context("helm returned invalid JSON")?;
-    Ok(Some(
-        releases
-            .into_iter()
-            .filter_map(|release| {
-                Some(HelmRelease {
-                    name: release.get("name")?.as_str()?.to_string(),
-                    namespace: release
-                        .get("namespace")
-                        .and_then(JsonValue::as_str)
-                        .unwrap_or("default")
-                        .to_string(),
-                    revision: release.get("revision").map(json_scalar).unwrap_or_default(),
-                    status: release
-                        .get("status")
-                        .and_then(JsonValue::as_str)
-                        .unwrap_or("unknown")
-                        .to_string(),
-                    chart: release
-                        .get("chart")
-                        .and_then(JsonValue::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    app_version: release
-                        .get("app_version")
-                        .and_then(JsonValue::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                })
+        ready_nodes: nodes
+            .iter()
+            .flatten()
+            .filter(|node| table::node_ready(node))
+            .count(),
+        total_nodes: nodes.as_ref().map(Vec::len),
+        running_pods: pods
+            .iter()
+            .flatten()
+            .filter(|pod| {
+                pod.pointer("/status/phase").and_then(JsonValue::as_str) == Some("Running")
             })
-            .collect(),
-    ))
-}
-
-fn resource_summary(kind: ResourceKind, resource: &JsonValue) -> Option<ResourceSummary> {
-    let metadata = resource.get("metadata")?;
-    let name = metadata.get("name")?.as_str()?.to_string();
-    let namespace = metadata
-        .get("namespace")
-        .and_then(JsonValue::as_str)
-        .map(str::to_string);
-    let created_at = metadata
-        .get("creationTimestamp")
-        .and_then(JsonValue::as_str)
-        .map(str::to_string);
-    let (status, ready, restarts) = resource_status(kind, resource);
-    Some(ResourceSummary {
-        kind,
-        namespace,
-        name,
-        status,
-        ready,
-        restarts,
-        created_at,
-    })
-}
-
-fn resource_status(
-    kind: ResourceKind,
-    resource: &JsonValue,
-) -> (String, Option<String>, Option<u64>) {
-    let status = resource.get("status").unwrap_or(&JsonValue::Null);
-    match kind {
-        ResourceKind::Pod => {
-            let containers = status
-                .get("containerStatuses")
-                .and_then(JsonValue::as_array);
-            let ready = containers.map(|containers| {
-                let ready = containers
-                    .iter()
-                    .filter(|container| {
-                        container.get("ready").and_then(JsonValue::as_bool) == Some(true)
-                    })
-                    .count();
-                format!("{ready}/{}", containers.len())
-            });
-            let restarts = containers.map(|containers| {
-                containers
-                    .iter()
-                    .filter_map(|container| {
-                        container.get("restartCount").and_then(JsonValue::as_u64)
-                    })
-                    .sum()
-            });
-            (
-                status
-                    .get("phase")
-                    .and_then(JsonValue::as_str)
-                    .unwrap_or("Unknown")
-                    .to_string(),
-                ready,
-                restarts,
-            )
-        }
-        ResourceKind::Deployment | ResourceKind::StatefulSet | ResourceKind::DaemonSet => {
-            let desired = status
-                .get(if kind == ResourceKind::DaemonSet {
-                    "desiredNumberScheduled"
-                } else {
-                    "replicas"
-                })
-                .and_then(JsonValue::as_u64)
-                .unwrap_or_default();
-            let ready_count = status
-                .get(if kind == ResourceKind::DaemonSet {
-                    "numberReady"
-                } else {
-                    "readyReplicas"
-                })
-                .and_then(JsonValue::as_u64)
-                .unwrap_or_default();
-            (
-                if ready_count == desired {
-                    "Ready"
-                } else {
-                    "Progressing"
-                }
-                .to_string(),
-                Some(format!("{ready_count}/{desired}")),
-                None,
-            )
-        }
-        ResourceKind::Job => {
-            let succeeded = status
-                .get("succeeded")
-                .and_then(JsonValue::as_u64)
-                .unwrap_or_default();
-            let failed = status
-                .get("failed")
-                .and_then(JsonValue::as_u64)
-                .unwrap_or_default();
-            let active = status
-                .get("active")
-                .and_then(JsonValue::as_u64)
-                .unwrap_or_default();
-            let status = if failed > 0 {
-                "Failed"
-            } else if active > 0 {
-                "Running"
-            } else if succeeded > 0 {
-                "Complete"
-            } else {
-                "Pending"
-            };
-            (status.to_string(), None, None)
-        }
-        ResourceKind::Service => (
-            resource
-                .pointer("/spec/type")
-                .and_then(JsonValue::as_str)
-                .unwrap_or("ClusterIP")
-                .to_string(),
-            None,
-            None,
-        ),
-        ResourceKind::PersistentVolumeClaim => (
-            status
-                .get("phase")
-                .and_then(JsonValue::as_str)
-                .unwrap_or("Pending")
-                .to_string(),
-            None,
-            None,
-        ),
-        ResourceKind::Node => {
-            let ready = status
-                .get("conditions")
-                .and_then(JsonValue::as_array)
-                .is_some_and(|conditions| {
-                    conditions.iter().any(|condition| {
-                        condition.get("type").and_then(JsonValue::as_str) == Some("Ready")
-                            && condition.get("status").and_then(JsonValue::as_str) == Some("True")
-                    })
-                });
-            (
-                if ready { "Ready" } else { "NotReady" }.to_string(),
-                None,
-                None,
-            )
-        }
-        ResourceKind::Event => (
-            resource
-                .get("reason")
-                .and_then(JsonValue::as_str)
-                .unwrap_or("Event")
-                .to_string(),
-            None,
-            None,
-        ),
-        _ => ("Active".to_string(), None, None),
-    }
-}
-
-fn json_scalar(value: &JsonValue) -> String {
-    match value {
-        JsonValue::String(value) => value.clone(),
-        JsonValue::Number(value) => value.to_string(),
-        _ => String::new(),
-    }
-}
-
-async fn kubectl_json(sbx: &Sbx, sandbox_name: &str, arguments: &[&str]) -> Result<JsonValue> {
-    let mut command = vec!["kubectl"];
-    command.extend_from_slice(arguments);
-    let output = sbx.exec(sandbox_name, &command).await?;
-    let output = ensure_success(&format!("kubectl {}", arguments.join(" ")), output)?;
-    serde_json::from_slice(&output.stdout)
-        .with_context(|| format!("kubectl {} returned invalid JSON", arguments.join(" ")))
-}
-
-async fn kubectl_json_if_allowed(
-    sbx: &Sbx,
-    sandbox_name: &str,
-    arguments: &[&str],
-) -> Result<Option<JsonValue>> {
-    let mut command = vec!["kubectl"];
-    command.extend_from_slice(arguments);
-    let output = sbx.exec(sandbox_name, &command).await?;
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        if error.contains("Forbidden") || error.contains("forbidden") {
-            return Ok(None);
-        }
-    }
-    let output = ensure_success(&format!("kubectl {}", arguments.join(" ")), output)?;
-    serde_json::from_slice(&output.stdout)
-        .with_context(|| format!("kubectl {} returned invalid JSON", arguments.join(" ")))
-        .map(Some)
-}
-
-fn ensure_success(command: &str, output: std::process::Output) -> Result<std::process::Output> {
-    if output.status.success() {
-        return Ok(output);
-    }
-    let message = String::from_utf8_lossy(&output.stderr)
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("command failed without error output")
-        .to_string();
-    Err(anyhow!("{command} failed: {message}"))
+            .count(),
+        total_pods: pods.as_ref().map(Vec::len),
+    }))
 }
 
 #[cfg(test)]

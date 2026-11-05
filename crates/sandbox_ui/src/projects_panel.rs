@@ -108,7 +108,7 @@ impl ProjectsPanel {
             .border_b_1()
             .border_color(cx.theme().colors().border_variant)
             .child(
-                Label::new("WORKSPACES")
+                Label::new("PROJECTS")
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
@@ -157,11 +157,9 @@ impl ProjectsPanel {
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
-                    .child(
-                        Button::new("create-first-project", "New Workspace").on_click(
-                            |_, window, cx| window.dispatch_action(NewProject.boxed_clone(), cx),
-                        ),
-                    );
+                    .child(Button::new("create-first-project", "New Project").on_click(
+                        |_, window, cx| window.dispatch_action(NewProject.boxed_clone(), cx),
+                    ));
             }
             ProjectList::Loaded(sandboxes) => sandboxes,
         };
@@ -197,7 +195,7 @@ impl ProjectsPanel {
                             .min_w_0()
                             .child(Label::new(sandbox.name.clone()).truncate())
                             .child(
-                                Label::new(format!("{} workspace", sandbox.agent))
+                                Label::new(crate::agent_display_name(&sandbox.agent).to_string())
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),

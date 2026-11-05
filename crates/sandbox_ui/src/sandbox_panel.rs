@@ -3,19 +3,16 @@ use std::{future::Future, time::Duration};
 use chrono::{DateTime, Utc};
 use gpui::{
     Action, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable,
-    PathPromptOptions, Pixels, PromptLevel, SharedString, Task, WeakEntity, actions, px,
+    PathPromptOptions, Pixels, SharedString, Task, WeakEntity, actions, px,
 };
-use kubernetes::{
-    HelmRelease, KubernetesOverview, PreparedConnection, ResourceKind, ResourceSummary,
-};
+use kubernetes::{KubernetesOverview, PreparedConnection};
 use sbx::{
     ConfiguredResources, NetworkActivity, NetworkDecision, NetworkLog, PolicyRules, PublishedPort,
     SandboxInfo, SandboxProbe, SandboxStatus, Sbx, SbxError,
 };
-use task::{SpawnInTerminal, TaskId};
 use ui::{
-    Chip, Divider, DividerColor, Indicator, ListItem, ProgressBar, ToggleButtonGroup,
-    ToggleButtonGroupStyle, ToggleButtonSimple, Toggleable, Tooltip, prelude::*,
+    Chip, Divider, DividerColor, Indicator, ProgressBar, ToggleButtonGroup, ToggleButtonGroupStyle,
+    ToggleButtonSimple, Tooltip, prelude::*,
 };
 use ui_input::InputField;
 use util::ResultExt as _;
@@ -76,36 +73,6 @@ enum KubernetesState {
     Failed(SharedString),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KubernetesPage {
-    Overview,
-    Resources,
-    Helm,
-    Doctor,
-}
-
-enum KubernetesResourcesState {
-    Idle,
-    Loading,
-    Loaded(Vec<ResourceSummary>),
-    Failed(SharedString),
-}
-
-enum KubernetesDetailsState {
-    None,
-    Loading(ResourceSummary),
-    Loaded(ResourceSummary, String),
-    Failed(ResourceSummary, SharedString),
-}
-
-enum HelmState {
-    Idle,
-    Loading,
-    NotInstalled,
-    Loaded(Vec<HelmRelease>),
-    Failed(SharedString),
-}
-
 enum PanelState {
     NoSandbox,
     Loading,
@@ -136,17 +103,8 @@ pub struct SandboxPanel {
     action_error: Option<SharedString>,
     installing_toolchains: bool,
     connecting_kubernetes: bool,
-    kubernetes_page: KubernetesPage,
-    kubernetes_resource_kind: ResourceKind,
-    kubernetes_namespace_input: Entity<InputField>,
-    kubernetes_port_forward_input: Entity<InputField>,
-    kubernetes_scale_input: Entity<InputField>,
-    kubernetes_resources: KubernetesResourcesState,
-    kubernetes_details: KubernetesDetailsState,
-    helm_releases: HelmState,
     _refresh: Task<()>,
     _action: Task<()>,
-    _kubernetes_task: Task<()>,
 }
 
 impl SandboxPanel {
@@ -166,14 +124,6 @@ impl SandboxPanel {
                     InputField::new(window, cx, "https://github.com/owner/repository.git")
                         .label("Git repository URL")
                 });
-                let kubernetes_namespace_input = cx.new(|cx| {
-                    InputField::new(window, cx, "All namespaces")
-                        .label("Namespace (empty means all)")
-                });
-                let kubernetes_port_forward_input =
-                    cx.new(|cx| InputField::new(window, cx, "8080:80").label("Local:remote port"));
-                let kubernetes_scale_input =
-                    cx.new(|cx| InputField::new(window, cx, "3").label("Replicas"));
                 let mut panel = Self {
                     workspace: workspace_handle,
                     focus_handle: cx.focus_handle(),
@@ -187,17 +137,8 @@ impl SandboxPanel {
                     action_error: None,
                     installing_toolchains: false,
                     connecting_kubernetes: false,
-                    kubernetes_page: KubernetesPage::Overview,
-                    kubernetes_resource_kind: ResourceKind::Pod,
-                    kubernetes_namespace_input,
-                    kubernetes_port_forward_input,
-                    kubernetes_scale_input,
-                    kubernetes_resources: KubernetesResourcesState::Idle,
-                    kubernetes_details: KubernetesDetailsState::None,
-                    helm_releases: HelmState::Idle,
                     _refresh: Task::ready(()),
                     _action: Task::ready(()),
-                    _kubernetes_task: Task::ready(()),
                 };
                 panel.schedule_refresh(window, cx);
                 panel
@@ -406,301 +347,6 @@ impl SandboxPanel {
                 }
                 this.schedule_refresh(window, cx);
                 cx.notify();
-            })
-            .log_err();
-        });
-    }
-
-    fn load_kubernetes_resources(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(name) = self.snapshot_name() else {
-            return;
-        };
-        let kind = self.kubernetes_resource_kind;
-        let namespace = self
-            .kubernetes_namespace_input
-            .read(cx)
-            .text(cx)
-            .trim()
-            .to_string();
-        self.kubernetes_resources = KubernetesResourcesState::Loading;
-        self.kubernetes_details = KubernetesDetailsState::None;
-        cx.notify();
-        self._kubernetes_task = cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    let sbx = Sbx::locate()?;
-                    kubernetes::list_resources(
-                        &sbx,
-                        &name,
-                        kind,
-                        (!namespace.is_empty()).then_some(namespace.as_str()),
-                    )
-                    .await
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.kubernetes_resources = match result {
-                    Ok(resources) => KubernetesResourcesState::Loaded(resources),
-                    Err(error) => KubernetesResourcesState::Failed(format!("{error:#}").into()),
-                };
-                cx.notify();
-            })
-            .log_err();
-        });
-    }
-
-    fn cycle_kubernetes_resource_kind(
-        &mut self,
-        offset: isize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let current = ResourceKind::ALL
-            .iter()
-            .position(|kind| *kind == self.kubernetes_resource_kind)
-            .unwrap_or_default();
-        let count = ResourceKind::ALL.len() as isize;
-        let index = (current as isize + offset).rem_euclid(count) as usize;
-        if let Some(kind) = ResourceKind::ALL.get(index).copied() {
-            self.kubernetes_resource_kind = kind;
-            self.load_kubernetes_resources(window, cx);
-        }
-    }
-
-    fn load_kubernetes_details(
-        &mut self,
-        resource: ResourceSummary,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(name) = self.snapshot_name() else {
-            return;
-        };
-        self.kubernetes_details = KubernetesDetailsState::Loading(resource.clone());
-        cx.notify();
-        self._kubernetes_task = cx.spawn_in(window, async move |this, cx| {
-            let resource_for_request = resource.clone();
-            let result = cx
-                .background_spawn(async move {
-                    let sbx = Sbx::locate()?;
-                    kubernetes::resource_yaml(&sbx, &name, &resource_for_request).await
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.kubernetes_details = match result {
-                    Ok(yaml) => KubernetesDetailsState::Loaded(resource, yaml),
-                    Err(error) => {
-                        KubernetesDetailsState::Failed(resource, format!("{error:#}").into())
-                    }
-                };
-                cx.notify();
-            })
-            .log_err();
-        });
-    }
-
-    fn load_helm_releases(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(name) = self.snapshot_name() else {
-            return;
-        };
-        self.helm_releases = HelmState::Loading;
-        cx.notify();
-        self._kubernetes_task = cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    let sbx = Sbx::locate()?;
-                    kubernetes::helm_releases(&sbx, &name).await
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.helm_releases = match result {
-                    Ok(Some(releases)) => HelmState::Loaded(releases),
-                    Ok(None) => HelmState::NotInstalled,
-                    Err(error) => HelmState::Failed(format!("{error:#}").into()),
-                };
-                cx.notify();
-            })
-            .log_err();
-        });
-    }
-
-    fn open_kubectl_terminal(
-        &mut self,
-        label: String,
-        arguments: Vec<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(workspace) = self.workspace.upgrade() else {
-            return;
-        };
-        workspace.update(cx, |workspace, cx| {
-            let command_label = format!("kubectl {}", arguments.join(" "));
-            workspace
-                .spawn_in_terminal(
-                    SpawnInTerminal {
-                        id: TaskId(format!("kubernetes-{label}")),
-                        full_label: label.clone(),
-                        label,
-                        command: Some("kubectl".to_string()),
-                        args: arguments,
-                        command_label,
-                        use_new_terminal: true,
-                        allow_concurrent_runs: true,
-                        ..Default::default()
-                    },
-                    window,
-                    cx,
-                )
-                .detach();
-        });
-    }
-
-    fn open_resource_command(
-        &mut self,
-        operation: &'static str,
-        resource: ResourceSummary,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let port_mapping = if operation == "port-forward" {
-            let mapping = self
-                .kubernetes_port_forward_input
-                .read(cx)
-                .text(cx)
-                .trim()
-                .to_string();
-            let valid = mapping.split_once(':').is_some_and(|(local, remote)| {
-                local.parse::<u16>().is_ok() && remote.parse::<u16>().is_ok()
-            });
-            if !valid {
-                self.action_error = Some("Enter a port mapping such as 8080:80".into());
-                cx.notify();
-                return;
-            }
-            mapping
-        } else {
-            String::new()
-        };
-        let replicas = if operation == "scale" {
-            let replicas = self
-                .kubernetes_scale_input
-                .read(cx)
-                .text(cx)
-                .trim()
-                .to_string();
-            if replicas.parse::<u32>().is_err() {
-                self.action_error = Some("Replicas must be a non-negative whole number".into());
-                cx.notify();
-                return;
-            }
-            replicas
-        } else {
-            String::new()
-        };
-        let mut arguments = match operation {
-            "logs" => vec![
-                "logs".to_string(),
-                format!("{}/{}", resource.kind.resource_name(), resource.name),
-                "--follow".to_string(),
-                "--all-containers".to_string(),
-            ],
-            "shell" => vec![
-                "exec".to_string(),
-                "-it".to_string(),
-                resource.name.clone(),
-                "--".to_string(),
-                "sh".to_string(),
-            ],
-            "port-forward" => vec![
-                "port-forward".to_string(),
-                format!("{}/{}", resource.kind.resource_name(), resource.name),
-                port_mapping,
-            ],
-            "edit" => vec![
-                "edit".to_string(),
-                resource.kind.resource_name().to_string(),
-                resource.name.clone(),
-            ],
-            "scale" => vec![
-                "scale".to_string(),
-                format!("{}/{}", resource.kind.resource_name(), resource.name),
-                format!("--replicas={replicas}"),
-            ],
-            _ => return,
-        };
-        if let Some(namespace) = resource.namespace.as_deref() {
-            arguments.splice(1..1, ["--namespace".to_string(), namespace.to_string()]);
-        }
-        self.open_kubectl_terminal(
-            format!("Kubernetes {operation}: {}", resource.name),
-            arguments,
-            window,
-            cx,
-        );
-    }
-
-    fn restart_kubernetes_resource(
-        &mut self,
-        resource: ResourceSummary,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(name) = self.snapshot_name() else {
-            return;
-        };
-        self._kubernetes_task = cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    let sbx = Sbx::locate()?;
-                    kubernetes::restart_resource(&sbx, &name, &resource).await
-                })
-                .await;
-            this.update_in(cx, |this, window, cx| {
-                if let Err(error) = result {
-                    this.action_error = Some(format!("{error:#}").into());
-                }
-                this.load_kubernetes_resources(window, cx);
-            })
-            .log_err();
-        });
-    }
-
-    fn delete_kubernetes_resource(
-        &mut self,
-        resource: ResourceSummary,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(name) = self.snapshot_name() else {
-            return;
-        };
-        let prompt = window.prompt(
-            PromptLevel::Warning,
-            &format!(
-                "Delete {} {}?",
-                resource.kind.resource_name(),
-                resource.name
-            ),
-            Some("This operation changes the connected Kubernetes cluster."),
-            &["Delete", "Cancel"],
-            cx,
-        );
-        self._kubernetes_task = cx.spawn_in(window, async move |this, cx| {
-            if prompt.await != Ok(0) {
-                return;
-            }
-            let result = cx
-                .background_spawn(async move {
-                    let sbx = Sbx::locate()?;
-                    kubernetes::delete_resource(&sbx, &name, &resource).await
-                })
-                .await;
-            this.update_in(cx, |this, window, cx| {
-                if let Err(error) = result {
-                    this.action_error = Some(format!("{error:#}").into());
-                }
-                this.load_kubernetes_resources(window, cx);
             })
             .log_err();
         });
@@ -992,377 +638,34 @@ impl SandboxPanel {
                 .into_any_element(),
             KubernetesState::Connected(overview) => v_flex()
                 .gap_3()
-                .child(self.render_kubernetes_navigation(cx))
-                .child(match self.kubernetes_page {
-                    KubernetesPage::Overview => render_kubernetes_overview(overview, cx)
-                        .child(muted(
-                            "kubectl is available to this project's terminals and agents.",
-                        ))
-                        .child(
-                            Button::new("replace-kubernetes", replace_label)
-                                .style(ButtonStyle::Outlined)
-                                .full_width()
-                                .disabled(self.connecting_kubernetes)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.connect_kubernetes(window, cx)
-                                })),
-                        )
-                        .into_any_element(),
-                    KubernetesPage::Resources => self.render_kubernetes_resources(cx),
-                    KubernetesPage::Helm => self.render_helm(cx),
-                    KubernetesPage::Doctor => render_kubernetes_doctor(overview).into_any_element(),
-                })
+                .child(render_kubernetes_summary(overview, cx))
+                .child(
+                    Button::new("open-kubernetes", "Open Kubernetes")
+                        .style(ButtonStyle::Filled)
+                        .full_width()
+                        .start_icon(Icon::new(IconName::Blocks).size(IconSize::Small))
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(crate::kubernetes_view::OpenKubernetes.boxed_clone(), cx)
+                        }),
+                )
+                .child(muted(
+                    "kubectl and helm are available to this project's terminals and agents.",
+                ))
+                .child(
+                    Button::new("replace-kubernetes", replace_label)
+                        .style(ButtonStyle::Subtle)
+                        .full_width()
+                        .disabled(self.connecting_kubernetes)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.connect_kubernetes(window, cx)
+                        })),
+                )
                 .into_any_element(),
         };
         v_flex()
             .p_3()
             .child(section("Cluster", IconName::Blocks, content, cx))
             .into_any_element()
-    }
-
-    fn render_kubernetes_navigation(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        ToggleButtonGroup::single_row(
-            "kubernetes-page",
-            [
-                ToggleButtonSimple::new(
-                    "Overview",
-                    cx.listener(|this, _, _, cx| {
-                        this.kubernetes_page = KubernetesPage::Overview;
-                        cx.notify();
-                    }),
-                ),
-                ToggleButtonSimple::new(
-                    "Resources",
-                    cx.listener(|this, _, window, cx| {
-                        this.kubernetes_page = KubernetesPage::Resources;
-                        if matches!(this.kubernetes_resources, KubernetesResourcesState::Idle) {
-                            this.load_kubernetes_resources(window, cx);
-                        } else {
-                            cx.notify();
-                        }
-                    }),
-                ),
-                ToggleButtonSimple::new(
-                    "Helm",
-                    cx.listener(|this, _, window, cx| {
-                        this.kubernetes_page = KubernetesPage::Helm;
-                        if matches!(this.helm_releases, HelmState::Idle) {
-                            this.load_helm_releases(window, cx);
-                        } else {
-                            cx.notify();
-                        }
-                    }),
-                ),
-                ToggleButtonSimple::new(
-                    "Doctor",
-                    cx.listener(|this, _, _, cx| {
-                        this.kubernetes_page = KubernetesPage::Doctor;
-                        cx.notify();
-                    }),
-                ),
-            ],
-        )
-        .style(ToggleButtonGroupStyle::Outlined)
-        .selected_index(match self.kubernetes_page {
-            KubernetesPage::Overview => 0,
-            KubernetesPage::Resources => 1,
-            KubernetesPage::Helm => 2,
-            KubernetesPage::Doctor => 3,
-        })
-    }
-
-    fn render_kubernetes_resources(&self, cx: &mut Context<Self>) -> AnyElement {
-        let controls = v_flex()
-            .gap_2()
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        IconButton::new("previous-kubernetes-kind", IconName::ChevronLeft)
-                            .icon_size(IconSize::Small)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.cycle_kubernetes_resource_kind(-1, window, cx)
-                            })),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(Label::new(self.kubernetes_resource_kind.display_name())),
-                    )
-                    .child(
-                        IconButton::new("next-kubernetes-kind", IconName::ChevronRight)
-                            .icon_size(IconSize::Small)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.cycle_kubernetes_resource_kind(1, window, cx)
-                            })),
-                    )
-                    .child(
-                        IconButton::new("refresh-kubernetes-resources", IconName::RotateCw)
-                            .icon_size(IconSize::Small)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.load_kubernetes_resources(window, cx)
-                            })),
-                    ),
-            )
-            .child(self.kubernetes_namespace_input.clone());
-        let resources = match &self.kubernetes_resources {
-            KubernetesResourcesState::Idle => muted("Choose a resource kind.").into_any_element(),
-            KubernetesResourcesState::Loading => muted("Loading resources…").into_any_element(),
-            KubernetesResourcesState::Failed(error) => Label::new(error.clone())
-                .size(LabelSize::Small)
-                .color(Color::Error)
-                .into_any_element(),
-            KubernetesResourcesState::Loaded(resources) if resources.is_empty() => {
-                muted("No resources found.").into_any_element()
-            }
-            KubernetesResourcesState::Loaded(resources) => v_flex()
-                .gap_1()
-                .children(
-                    resources
-                        .iter()
-                        .cloned()
-                        .enumerate()
-                        .map(|(index, resource)| {
-                            let selected = match &self.kubernetes_details {
-                                KubernetesDetailsState::Loading(selected)
-                                | KubernetesDetailsState::Loaded(selected, _)
-                                | KubernetesDetailsState::Failed(selected, _) => {
-                                    selected.kind == resource.kind
-                                        && selected.namespace == resource.namespace
-                                        && selected.name == resource.name
-                                }
-                                KubernetesDetailsState::None => false,
-                            };
-                            let resource_for_click = resource.clone();
-                            ListItem::new(index)
-                                .toggle_state(selected)
-                                .child(
-                                    v_flex()
-                                        .min_w_0()
-                                        .child(Label::new(resource.name.clone()).truncate())
-                                        .child(muted(format_resource_metadata(&resource))),
-                                )
-                                .end_slot(muted(resource.status))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.load_kubernetes_details(
-                                        resource_for_click.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                }))
-                        }),
-                )
-                .into_any_element(),
-        };
-        v_flex()
-            .gap_2()
-            .child(controls)
-            .child(resources)
-            .child(self.render_kubernetes_details(cx))
-            .into_any_element()
-    }
-
-    fn render_kubernetes_details(&self, cx: &mut Context<Self>) -> AnyElement {
-        match &self.kubernetes_details {
-            KubernetesDetailsState::None => div().into_any_element(),
-            KubernetesDetailsState::Loading(resource) => {
-                muted(format!("Loading {}…", resource.name)).into_any_element()
-            }
-            KubernetesDetailsState::Failed(_, error) => Label::new(error.clone())
-                .size(LabelSize::Small)
-                .color(Color::Error)
-                .into_any_element(),
-            KubernetesDetailsState::Loaded(resource, yaml) => {
-                let resource_for_logs = resource.clone();
-                let resource_for_shell = resource.clone();
-                let resource_for_forward = resource.clone();
-                let resource_for_edit = resource.clone();
-                let resource_for_scale = resource.clone();
-                let resource_for_restart = resource.clone();
-                let resource_for_delete = resource.clone();
-                v_flex()
-                    .gap_2()
-                    .pt_2()
-                    .border_t_1()
-                    .border_color(cx.theme().colors().border_variant)
-                    .when(
-                        matches!(resource.kind, ResourceKind::Pod | ResourceKind::Service),
-                        |this| this.child(self.kubernetes_port_forward_input.clone()),
-                    )
-                    .when(
-                        matches!(
-                            resource.kind,
-                            ResourceKind::Deployment | ResourceKind::StatefulSet
-                        ),
-                        |this| this.child(self.kubernetes_scale_input.clone()),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .flex_wrap()
-                            .when(resource.kind.supports_logs(), |this| {
-                                this.child(
-                                    Button::new("kubernetes-resource-logs", "Logs")
-                                        .style(ButtonStyle::Outlined)
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.open_resource_command(
-                                                "logs",
-                                                resource_for_logs.clone(),
-                                                window,
-                                                cx,
-                                            )
-                                        })),
-                                )
-                            })
-                            .when(resource.kind == ResourceKind::Pod, |this| {
-                                this.child(
-                                    Button::new("kubernetes-resource-shell", "Shell")
-                                        .style(ButtonStyle::Outlined)
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.open_resource_command(
-                                                "shell",
-                                                resource_for_shell.clone(),
-                                                window,
-                                                cx,
-                                            )
-                                        })),
-                                )
-                            })
-                            .when(
-                                matches!(resource.kind, ResourceKind::Pod | ResourceKind::Service),
-                                |this| {
-                                    this.child(
-                                        Button::new("kubernetes-resource-forward", "Forward")
-                                            .style(ButtonStyle::Outlined)
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.open_resource_command(
-                                                    "port-forward",
-                                                    resource_for_forward.clone(),
-                                                    window,
-                                                    cx,
-                                                )
-                                            })),
-                                    )
-                                },
-                            )
-                            .when(resource.kind.supports_restart(), |this| {
-                                this.child(
-                                    Button::new("kubernetes-resource-restart", "Restart")
-                                        .style(ButtonStyle::Outlined)
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.restart_kubernetes_resource(
-                                                resource_for_restart.clone(),
-                                                window,
-                                                cx,
-                                            )
-                                        })),
-                                )
-                            })
-                            .when(
-                                matches!(
-                                    resource.kind,
-                                    ResourceKind::Deployment | ResourceKind::StatefulSet
-                                ),
-                                |this| {
-                                    this.child(
-                                        Button::new("kubernetes-resource-scale", "Scale")
-                                            .style(ButtonStyle::Outlined)
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.open_resource_command(
-                                                    "scale",
-                                                    resource_for_scale.clone(),
-                                                    window,
-                                                    cx,
-                                                )
-                                            })),
-                                    )
-                                },
-                            )
-                            .child(
-                                Button::new("kubernetes-resource-edit", "Edit YAML")
-                                    .style(ButtonStyle::Outlined)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.open_resource_command(
-                                            "edit",
-                                            resource_for_edit.clone(),
-                                            window,
-                                            cx,
-                                        )
-                                    })),
-                            )
-                            .child(
-                                Button::new("kubernetes-resource-delete", "Delete")
-                                    .style(ButtonStyle::Outlined)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.delete_kubernetes_resource(
-                                            resource_for_delete.clone(),
-                                            window,
-                                            cx,
-                                        )
-                                    })),
-                            ),
-                    )
-                    .child(
-                        v_flex()
-                            .p_2()
-                            .rounded_md()
-                            .bg(cx.theme().colors().editor_background)
-                            .children(yaml.lines().take(200).map(|line| {
-                                Label::new(line.to_string())
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted)
-                            })),
-                    )
-                    .into_any_element()
-            }
-        }
-    }
-
-    fn render_helm(&self, cx: &mut Context<Self>) -> AnyElement {
-        match &self.helm_releases {
-            HelmState::Idle => muted("Open Helm to load releases.").into_any_element(),
-            HelmState::Loading => muted("Loading Helm releases…").into_any_element(),
-            HelmState::NotInstalled => v_flex()
-                .gap_2()
-                .child(muted("Helm is not installed in this project sandbox."))
-                .child(muted(
-                    "Install Helm in the project terminal to manage releases.",
-                ))
-                .into_any_element(),
-            HelmState::Failed(error) => Label::new(error.clone())
-                .size(LabelSize::Small)
-                .color(Color::Error)
-                .into_any_element(),
-            HelmState::Loaded(releases) if releases.is_empty() => {
-                muted("No Helm releases found.").into_any_element()
-            }
-            HelmState::Loaded(releases) => v_flex()
-                .gap_1()
-                .child(
-                    Button::new("refresh-helm-releases", "Refresh")
-                        .style(ButtonStyle::Outlined)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.load_helm_releases(window, cx)),
-                        ),
-                )
-                .children(releases.iter().map(|release| {
-                    v_flex()
-                        .p_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(cx.theme().colors().border_variant)
-                        .child(
-                            row()
-                                .child(Label::new(release.name.clone()))
-                                .child(muted(release.status.clone())),
-                        )
-                        .child(muted(format!(
-                            "{} · {} · revision {}",
-                            release.namespace, release.chart, release.revision
-                        )))
-                }))
-                .into_any_element(),
-        }
     }
 
     fn render_settings(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
@@ -1764,106 +1067,52 @@ async fn load_snapshot(name: String) -> anyhow::Result<Snapshot> {
     })
 }
 
-fn render_kubernetes_overview(overview: &KubernetesOverview, _cx: &App) -> gpui::Div {
+fn render_kubernetes_summary(overview: &KubernetesOverview, cx: &App) -> impl IntoElement {
+    let nodes = match overview.total_nodes {
+        Some(total) => format!("{}/{total}", overview.ready_nodes),
+        None => "—".to_string(),
+    };
+    let pods = match overview.total_pods {
+        Some(total) => format!("{}/{total}", overview.running_pods),
+        None => "—".to_string(),
+    };
     v_flex()
         .gap_2()
         .child(
-            row()
-                .child(Label::new("Context"))
-                .child(muted(overview.context.clone())),
+            v_flex()
+                .child(Label::new(overview.context.clone()).truncate())
+                .child(
+                    Label::new(format!("{} · {}", overview.server, overview.version))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted)
+                        .truncate(),
+                ),
         )
-        .child(
-            row()
-                .child(Label::new("API server"))
-                .child(muted(overview.server.clone()).truncate()),
-        )
-        .child(
-            row()
-                .child(Label::new("Namespace"))
-                .child(muted(overview.namespace.clone())),
-        )
-        .child(
-            row()
-                .child(Label::new("Kubernetes"))
-                .child(muted(overview.version.clone())),
-        )
-        .child(
-            row().child(Label::new("Nodes")).child(muted(
-                overview
-                    .total_nodes
-                    .map(|total| format!("{} / {total} ready", overview.ready_nodes))
-                    .unwrap_or_else(|| "not permitted".to_string()),
-            )),
-        )
-        .child(
-            row().child(Label::new("Pods")).child(muted(
-                overview
-                    .total_pods
-                    .map(|total| format!("{} / {total} running", overview.running_pods))
-                    .unwrap_or_else(|| "not permitted".to_string()),
-            )),
-        )
-}
-
-fn render_kubernetes_doctor(overview: &KubernetesOverview) -> gpui::Div {
-    let nodes_healthy = overview
-        .total_nodes
-        .is_some_and(|total| total > 0 && overview.ready_nodes == total);
-    let pods_healthy = overview
-        .total_pods
-        .is_some_and(|total| overview.running_pods == total);
-    v_flex()
-        .gap_2()
-        .child(doctor_row(
-            "API server",
-            overview.version != "unknown",
-            overview.version.clone(),
-        ))
-        .child(doctor_row(
-            "Nodes",
-            nodes_healthy,
-            overview
-                .total_nodes
-                .map(|total| format!("{} of {total} ready", overview.ready_nodes))
-                .unwrap_or_else(|| "permission denied".to_string()),
-        ))
-        .child(doctor_row(
-            "Pods",
-            pods_healthy,
-            overview
-                .total_pods
-                .map(|total| format!("{} of {total} running", overview.running_pods))
-                .unwrap_or_else(|| "permission denied".to_string()),
-        ))
-}
-
-fn doctor_row(label: &'static str, healthy: bool, detail: String) -> gpui::Div {
-    row()
         .child(
             h_flex()
                 .gap_2()
-                .child(Indicator::dot().color(if healthy {
-                    Color::Success
-                } else {
-                    Color::Warning
-                }))
-                .child(Label::new(label)),
+                .child(stat_tile("Nodes ready", nodes, cx))
+                .child(stat_tile("Pods running", pods, cx))
+                .child(stat_tile("Namespace", overview.namespace.clone(), cx)),
         )
-        .child(muted(detail))
 }
 
-fn format_resource_metadata(resource: &ResourceSummary) -> String {
-    let mut metadata = Vec::new();
-    if let Some(namespace) = &resource.namespace {
-        metadata.push(namespace.clone());
-    }
-    if let Some(ready) = &resource.ready {
-        metadata.push(format!("ready {ready}"));
-    }
-    if let Some(restarts) = resource.restarts {
-        metadata.push(format!("{restarts} restarts"));
-    }
-    metadata.join(" · ")
+fn stat_tile(label: &'static str, value: String, cx: &App) -> impl IntoElement {
+    v_flex()
+        .flex_1()
+        .min_w_0()
+        .p_2()
+        .gap_0p5()
+        .rounded_md()
+        .border_1()
+        .border_color(cx.theme().colors().border_variant)
+        .bg(cx.theme().colors().element_background)
+        .child(Label::new(value).truncate())
+        .child(
+            Label::new(label)
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
+        )
 }
 
 fn render_resources(snapshot: &Snapshot, cx: &App) -> impl IntoElement {

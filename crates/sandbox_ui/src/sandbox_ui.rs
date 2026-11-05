@@ -25,12 +25,38 @@ use workspace::{
     with_active_or_new_workspace,
 };
 
+mod kubernetes_view;
 mod new_project_modal;
 mod projects_panel;
 mod sandbox_panel;
 
+pub use kubernetes_view::KubernetesView;
 pub use projects_panel::ProjectsPanel;
 pub use sandbox_panel::SandboxPanel;
+
+/// Built-in `sbx` agents, by the name `sbx create` takes and the name shown to the user. `shell`
+/// is a sandbox without a coding agent.
+pub(crate) const AGENTS: [(&str, &str); 11] = [
+    ("shell", "No agent"),
+    ("claude", "Claude Code"),
+    ("codex", "Codex"),
+    ("copilot", "GitHub Copilot"),
+    ("cursor", "Cursor"),
+    ("gemini", "Gemini CLI"),
+    ("opencode", "OpenCode"),
+    ("kiro", "Kiro"),
+    ("devin", "Devin"),
+    ("droid", "Droid"),
+    ("docker-agent", "Docker Agent"),
+];
+
+pub(crate) fn agent_display_name(agent: &str) -> &str {
+    AGENTS
+        .iter()
+        .find(|(name, _)| *name == agent)
+        .map(|(_, display_name)| *display_name)
+        .unwrap_or(agent)
+}
 
 actions!(
     sands,
@@ -46,6 +72,7 @@ pub fn init(cx: &mut App) {
             workspace.toggle_modal(window, cx, SandboxModal::new);
         });
     });
+    kubernetes_view::init(cx);
     projects_panel::init(cx);
     sandbox_panel::init(cx);
     cx.observe_new(|workspace: &mut Workspace, _, cx| trust_sandbox_worktrees(workspace, cx))

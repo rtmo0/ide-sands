@@ -1213,6 +1213,145 @@ fn create_arguments(options: &CreateOptions) -> Vec<OsString> {
     arguments
 }
 
+/// Runs each request in a fresh `bash` and answers with one line, so binary and multi-line
+/// output survive: `<id> <exit status> <base64 stdout> <base64 stderr>`.
+const SESSION_LOOP: &str = r#"
+while IFS=' ' read -r request_id request_script; do
+  request_dir=$(mktemp -d)
+  printf '%s' "$request_script" | base64 -d > "$request_dir/script"
+  bash "$request_dir/script" > "$request_dir/stdout" 2> "$request_dir/stderr" < /dev/null
+  request_status=$?
+  printf '%s %s %s %s\n' "$request_id" "$request_status" "$(base64 -w0 < "$request_dir/stdout")" "$(base64 -w0 < "$request_dir/stderr")"
+  rm -rf "$request_dir"
+done
+"#;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShellOutput {
+    pub status: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+impl ShellOutput {
+    pub fn success(&self) -> bool {
+        self.status == 0
+    }
+
+    /// The first non-empty line of stderr, for error messages.
+    pub fn error_line(&self) -> Option<String> {
+        first_error_line(&self.stderr)
+    }
+}
+
+/// A login shell kept running inside a sandbox. Every `sbx exec` costs about a second before the
+/// command starts, which is too slow for panels that query the sandbox on every refresh.
+pub struct ShellSession {
+    _child: util::command::Child,
+    stdin: Box<dyn futures::AsyncWrite + Send + Unpin>,
+    stdout: futures::io::BufReader<Box<dyn futures::AsyncRead + Send + Unpin>>,
+    next_request: u64,
+}
+
+impl ShellSession {
+    pub async fn start(sbx: &Sbx, name: &str) -> Result<Self, SbxError> {
+        let arguments = ["exec", "-i", name, "bash", "-lc", SESSION_LOOP];
+        let mut child = new_command(&sbx.executable)
+            .args(arguments)
+            .stdin(util::command::Stdio::piped())
+            .stdout(util::command::Stdio::piped())
+            .stderr(util::command::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|source| SbxError::Spawn {
+                command: display_command(&arguments[..4]),
+                source,
+            })?;
+        let closed = || SbxError::CommandFailed {
+            command: display_command(&arguments[..4]),
+            message: "the sandbox shell has no pipes".to_string(),
+        };
+        let stdin: Box<dyn futures::AsyncWrite + Send + Unpin> =
+            Box::new(child.stdin.take().ok_or_else(closed)?);
+        let stdout: Box<dyn futures::AsyncRead + Send + Unpin> =
+            Box::new(child.stdout.take().ok_or_else(closed)?);
+        Ok(Self {
+            _child: child,
+            stdin,
+            stdout: futures::io::BufReader::new(stdout),
+            next_request: 0,
+        })
+    }
+
+    /// Runs `script` with `bash` inside the sandbox. A failed command is an `Ok` output with a
+    /// non-zero status; an `Err` means the session itself broke and must be started again.
+    pub async fn run(&mut self, script: &str) -> Result<ShellOutput, SbxError> {
+        use base64::Engine as _;
+        use futures::{AsyncBufReadExt as _, AsyncWriteExt as _};
+
+        let broken = |message: String| SbxError::CommandFailed {
+            command: "sbx exec -i bash".to_string(),
+            message,
+        };
+        self.next_request += 1;
+        let request = self.next_request;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(script);
+        self.stdin
+            .write_all(format!("{request} {encoded}\n").as_bytes())
+            .await
+            .map_err(|error| broken(format!("writing to the sandbox shell failed: {error}")))?;
+        self.stdin
+            .flush()
+            .await
+            .map_err(|error| broken(format!("writing to the sandbox shell failed: {error}")))?;
+        loop {
+            let mut line = String::new();
+            let read =
+                self.stdout.read_line(&mut line).await.map_err(|error| {
+                    broken(format!("reading the sandbox shell failed: {error}"))
+                })?;
+            if read == 0 {
+                return Err(broken("the sandbox shell exited".to_string()));
+            }
+            if let Some(output) = parse_session_response(request, &line)? {
+                return Ok(output);
+            }
+        }
+    }
+}
+
+/// Parses a response line. Lines for other requests, such as a request whose caller was
+/// cancelled before reading its answer, are skipped by returning `None`.
+fn parse_session_response(request: u64, line: &str) -> Result<Option<ShellOutput>, SbxError> {
+    use base64::Engine as _;
+
+    let invalid = || SbxError::CommandFailed {
+        command: "sbx exec -i bash".to_string(),
+        message: "the sandbox shell sent an invalid response".to_string(),
+    };
+    let mut parts = line.trim_end_matches('\n').splitn(4, ' ');
+    let id = parts.next().and_then(|id| id.parse::<u64>().ok());
+    if id != Some(request) {
+        return Ok(None);
+    }
+    let status = parts
+        .next()
+        .and_then(|status| status.parse::<i32>().ok())
+        .ok_or_else(invalid)?;
+    let decode = |part: Option<&str>| {
+        base64::engine::general_purpose::STANDARD
+            .decode(part.unwrap_or_default())
+            .map_err(|_| invalid())
+    };
+    let stdout = decode(parts.next())?;
+    let stderr = decode(parts.next())?;
+    Ok(Some(ShellOutput {
+        status,
+        stdout,
+        stderr,
+    }))
+}
+
 fn parse_json<T: DeserializeOwned>(command: &str, stdout: &[u8]) -> Result<T, SbxError> {
     // `sbx` occasionally prints an update notice after an otherwise valid JSON response.
     T::deserialize(&mut serde_json::Deserializer::from_slice(stdout)).map_err(|source| {
@@ -1544,6 +1683,54 @@ mod tests {
                 "/work/docs:ro"
             ]
         );
+    }
+
+    #[test]
+    fn parses_session_responses() -> TestResult {
+        assert_eq!(parse_session_response(2, "1 0 YQ== \n")?, None);
+        assert_eq!(
+            parse_session_response(2, "2 3 b3V0 ZXJy\n")?,
+            Some(ShellOutput {
+                status: 3,
+                stdout: b"out".to_vec(),
+                stderr: b"err".to_vec(),
+            })
+        );
+        assert_eq!(
+            parse_session_response(2, "2 0  \n")?,
+            Some(ShellOutput {
+                status: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        );
+        assert!(parse_session_response(2, "2 zero  \n").is_err());
+        Ok(())
+    }
+
+    /// Runs a shell session in a real sandbox: `cargo test -p sbx -- --ignored`.
+    #[test]
+    #[ignore]
+    fn runs_commands_in_a_shell_session() -> TestResult {
+        smol::block_on(async {
+            let sbx = Sbx::locate()?;
+            let name = sbx
+                .list()
+                .await?
+                .into_iter()
+                .next()
+                .map(|sandbox| sandbox.name)
+                .ok_or("no sandbox to test with")?;
+            let mut session = ShellSession::start(&sbx, &name).await?;
+            let output = session.run("printf 'a\\nb'; echo oops >&2; exit 4").await?;
+            assert_eq!(output.status, 4);
+            assert_eq!(output.stdout, b"a\nb");
+            assert_eq!(output.stderr, b"oops\n");
+            let output = session.run("head -c 300000 /dev/zero").await?;
+            assert!(output.success());
+            assert_eq!(output.stdout.len(), 300000);
+            Ok(())
+        })
     }
 
     /// Talks to the real `sbx` on this machine: `cargo test -p sbx -- --ignored`.
