@@ -1,23 +1,24 @@
 use std::path::PathBuf;
 
 use gpui::{
-    App, AppContext as _, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
-    PathPromptOptions, SharedString, Task, WeakEntity, prelude::FluentBuilder as _,
+    App, AppContext as _, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    PathPromptOptions, SharedString, Subscription, Task, WeakEntity,
 };
 use sbx::{CreateOptions, NetworkMode, Sbx};
-use ui::{
-    Button, ButtonCommon as _, ButtonStyle, Clickable as _, Color, Context, Disableable as _,
-    Headline, HeadlineSize, Icon, IconButton, IconName, IconSize, InteractiveElement, IntoElement,
-    Label, LabelCommon as _, LabelSize, ListItem, ListItemSpacing, ParentElement, Render, Styled,
-    StyledExt, ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Toggleable as _,
-    Tooltip, Window, div, h_flex, rems, v_flex,
-};
+use ui::{Headline, HeadlineSize, Toggleable as _, prelude::*};
 use ui_input::InputField;
 use util::ResultExt as _;
 use workspace::{ModalView, OpenMode, Workspace};
 
 use crate::{
-    AGENTS, open_sandbox, projects_panel::ProjectsPanel, sandbox_panel::parse_port_mapping,
+    AGENTS,
+    design::{
+        OptionCard, Slider, Tone, badge, caption, icon_button, primary_button, secondary_button,
+        section_header, slider_field, stepper,
+    },
+    open_sandbox,
+    projects_panel::ProjectsPanel,
+    sandbox_panel::parse_port_mapping,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -89,8 +90,9 @@ pub(crate) struct NewProjectModal {
     name: Entity<InputField>,
     network_mode: NetworkMode,
     allowed_hosts: Entity<InputField>,
-    cpu_limit: Entity<InputField>,
-    memory_limit: Entity<InputField>,
+    host: HostResources,
+    cpu_slider: Entity<Slider>,
+    memory_slider: Entity<Slider>,
     ports: Entity<InputField>,
     repositories: Vec<ProjectSource>,
     source_kind: SourceKind,
@@ -99,6 +101,67 @@ pub(crate) struct NewProjectModal {
     agent: usize,
     state: CreationState,
     _task: Option<Task<()>>,
+    _subscriptions: Vec<Subscription>,
+}
+
+/// Memory slider granularity; `sbx create --memory` takes binary units down to 512 MiB.
+const MEMORY_STEP_GIB: f64 = 0.5;
+
+/// The host limits `sbx create` applies: CPUs up to the host's, memory from 512 MiB up to 75% of
+/// the host, defaulting to half of it (at most 32 GiB).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HostResources {
+    cpus: u32,
+    memory_gib: f64,
+}
+
+impl HostResources {
+    fn detect() -> Self {
+        let cpus = std::thread::available_parallelism()
+            .map(|count| count.get() as u32)
+            .unwrap_or(4);
+        let mut system = sysinfo::System::new();
+        system.refresh_memory();
+        let memory_gib = system.total_memory() as f64 / 1024f64.powi(3);
+        Self {
+            cpus,
+            memory_gib: if memory_gib > 0.0 { memory_gib } else { 8.0 },
+        }
+    }
+
+    fn snap(gib: f64) -> f64 {
+        ((gib / MEMORY_STEP_GIB).floor() * MEMORY_STEP_GIB).max(MEMORY_STEP_GIB)
+    }
+
+    fn total_memory_gib(self) -> f64 {
+        Self::snap(self.memory_gib)
+    }
+
+    fn max_memory_gib(self) -> f64 {
+        Self::snap(self.memory_gib * 0.75)
+    }
+
+    fn default_memory_gib(self) -> f64 {
+        Self::snap((self.memory_gib * 0.5).min(32.0)).min(self.max_memory_gib())
+    }
+
+    /// The `sbx create` limits for the slider values; values equal to the defaults are left to
+    /// `sbx`, so they keep following the host.
+    fn limits(self, cpus: f64, memory_gib: f64) -> (Option<u32>, Option<String>) {
+        let cpus = cpus.round() as u32;
+        let cpus = (cpus < self.cpus).then_some(cpus.max(1));
+        let memory = ((memory_gib - self.default_memory_gib()).abs() > f64::EPSILON)
+            .then(|| format!("{}m", (memory_gib * 1024.0).round() as u64));
+        (cpus, memory)
+    }
+}
+
+fn format_gib(gib: f64) -> String {
+    if gib.fract() == 0.0 {
+        format!("{gib:.0} GB")
+    } else {
+        format!("{gib:.1} GB")
+    }
 }
 
 impl NewProjectModal {
@@ -117,30 +180,30 @@ impl NewProjectModal {
                 .label("Also allow")
                 .tab_index(2)
         });
-        let cpu_limit = cx.new(|cx| {
-            InputField::new(window, cx, "Auto")
-                .label("CPUs")
-                .tab_index(3)
+        let host = HostResources::detect();
+        let cpu_slider = cx.new(|_| Slider::new(host.cpus as f64, 1.0, host.cpus as f64, 1.0));
+        let memory_slider = cx.new(|_| {
+            Slider::new(
+                host.default_memory_gib(),
+                MEMORY_STEP_GIB,
+                host.total_memory_gib(),
+                MEMORY_STEP_GIB,
+            )
+            .with_limit(host.max_memory_gib())
         });
-        let memory_limit = cx.new(|cx| {
-            InputField::new(window, cx, "Auto, e.g. 8g")
-                .label("Memory")
-                .tab_index(4)
-        });
+        let _subscriptions = vec![
+            cx.observe(&cpu_slider, |_, _, cx| cx.notify()),
+            cx.observe(&memory_slider, |_, _, cx| cx.notify()),
+        ];
         let ports = cx.new(|cx| {
             InputField::new(window, cx, "3000, 8080:80")
                 .label("Published ports")
                 .tab_index(5)
         });
-        let local_path = cx.new(|cx| {
-            InputField::new(window, cx, "/path/to/git/repository")
-                .label("Local folder")
-                .tab_index(1)
-        });
+        let local_path =
+            cx.new(|cx| InputField::new(window, cx, "/path/to/git/repository").tab_index(1));
         let git_url = cx.new(|cx| {
-            InputField::new(window, cx, "https://github.com/owner/repository.git")
-                .label("Git URL")
-                .tab_index(1)
+            InputField::new(window, cx, "https://github.com/owner/repository.git").tab_index(1)
         });
         Self {
             workspace,
@@ -149,8 +212,9 @@ impl NewProjectModal {
             name,
             network_mode: NetworkMode::Balanced,
             allowed_hosts,
-            cpu_limit,
-            memory_limit,
+            host,
+            cpu_slider,
+            memory_slider,
             ports,
             repositories: Vec::new(),
             source_kind: SourceKind::LocalRepository,
@@ -159,6 +223,7 @@ impl NewProjectModal {
             agent: 0,
             state: CreationState::Editing,
             _task: None,
+            _subscriptions,
         }
     }
 
@@ -168,10 +233,10 @@ impl NewProjectModal {
     }
 
     fn sandbox_settings(&self, cx: &App) -> Result<SandboxSettings, String> {
-        let (cpus, memory) = resource_limits(
-            self.cpu_limit.read(cx).text(cx).trim(),
-            self.memory_limit.read(cx).text(cx).trim(),
-        )?;
+        let (cpus, memory) = self.host.limits(
+            self.cpu_slider.read(cx).value(),
+            self.memory_slider.read(cx).value(),
+        );
         let allowed_hosts = if self.network_mode == NetworkMode::AllowAll {
             Vec::new()
         } else {
@@ -530,37 +595,6 @@ fn port_mappings(text: &str) -> Result<Vec<String>, String> {
         .collect()
 }
 
-fn resource_limits(
-    cpu_limit: &str,
-    memory_limit: &str,
-) -> Result<(Option<u32>, Option<String>), String> {
-    let cpus = if cpu_limit.is_empty() {
-        None
-    } else {
-        let cpus = cpu_limit
-            .parse::<u32>()
-            .map_err(|_| "CPU limit must be a positive whole number".to_string())?;
-        if cpus == 0 {
-            return Err("CPU limit must be greater than zero".to_string());
-        }
-        Some(cpus)
-    };
-    let memory = if memory_limit.is_empty() {
-        None
-    } else {
-        let normalized = memory_limit.to_ascii_lowercase();
-        let (amount, unit) = normalized.split_at(normalized.len().saturating_sub(1));
-        let valid = !amount.is_empty()
-            && amount.chars().all(|character| character.is_ascii_digit())
-            && matches!(unit, "k" | "m" | "g" | "t");
-        if !valid {
-            return Err("Memory limit must use binary units, for example 512m or 8g".to_string());
-        }
-        Some(normalized)
-    };
-    Ok((cpus, memory))
-}
-
 /// Every cloned repository needs a distinct folder inside the sandbox workspace.
 fn validate_repositories(repositories: &[ProjectSource]) -> Result<(), String> {
     if repositories.is_empty() {
@@ -674,232 +708,328 @@ impl NewProjectModal {
     }
 
     fn render_sandbox_step(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mode_description = match self.network_mode {
-            NetworkMode::AllowAll => "The sandbox can reach any host.",
-            NetworkMode::Balanced => {
-                "Git hosting, package registries, toolchain downloads, container registries and \
-                 model providers."
-            }
-            NetworkMode::DenyAll => {
-                "No outbound traffic except the agent's own provider and the hosts allowed below."
-            }
+        let network_card = |mode: NetworkMode,
+                            icon: IconName,
+                            title: &'static str,
+                            description: &'static str,
+                            cx: &mut Context<Self>| {
+            OptionCard::new(SharedString::from(title), icon, title)
+                .description(description)
+                .selected(self.network_mode == mode)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.network_mode = mode;
+                    cx.notify();
+                }))
+        };
+        let cpus = self.cpu_slider.read(cx).value();
+        let memory = self.memory_slider.read(cx).value();
+        let cpu_text = if cpus as u32 >= self.host.cpus {
+            format!("{} (all)", self.host.cpus)
+        } else {
+            format!("{cpus:.0}")
+        };
+        let memory_text = if (memory - self.host.default_memory_gib()).abs() < f64::EPSILON {
+            format!("{} (default)", format_gib(memory))
+        } else {
+            format_gib(memory)
         };
         v_flex()
-            .gap_3()
+            .gap_5()
             .child(self.name.clone())
             .child(
                 v_flex()
-                    .gap_1()
-                    .child(section_label("Network"))
+                    .gap_2()
+                    .child(section_header("Network", None))
                     .child(
-                        ToggleButtonGroup::single_row(
-                            "network-mode",
-                            [
-                                ToggleButtonSimple::new(
-                                    "Allow All",
-                                    cx.listener(|this, _, _, cx| {
-                                        this.network_mode = NetworkMode::AllowAll;
-                                        cx.notify();
-                                    }),
-                                ),
-                                ToggleButtonSimple::new(
-                                    "Balanced",
-                                    cx.listener(|this, _, _, cx| {
-                                        this.network_mode = NetworkMode::Balanced;
-                                        cx.notify();
-                                    }),
-                                ),
-                                ToggleButtonSimple::new(
-                                    "Deny All",
-                                    cx.listener(|this, _, _, cx| {
-                                        this.network_mode = NetworkMode::DenyAll;
-                                        cx.notify();
-                                    }),
-                                ),
-                            ],
-                        )
-                        .style(ToggleButtonGroupStyle::Outlined)
-                        .auto_width()
-                        .selected_index(match self.network_mode {
-                            NetworkMode::AllowAll => 0,
-                            NetworkMode::Balanced => 1,
-                            NetworkMode::DenyAll => 2,
-                        }),
+                        h_flex()
+                            .gap_2()
+                            .items_stretch()
+                            .child(network_card(
+                                NetworkMode::AllowAll,
+                                IconName::Public,
+                                "Allow all",
+                                "Any host on the internet.",
+                                cx,
+                            ))
+                            .child(network_card(
+                                NetworkMode::Balanced,
+                                IconName::Box,
+                                "Balanced",
+                                "Git, package registries, toolchains and model APIs.",
+                                cx,
+                            ))
+                            .child(network_card(
+                                NetworkMode::DenyAll,
+                                IconName::Lock,
+                                "Deny all",
+                                "Only the agent's provider and the hosts below.",
+                                cx,
+                            )),
                     )
-                    .child(hint(mode_description))
                     .when(self.network_mode != NetworkMode::AllowAll, |this| {
-                        this.child(self.allowed_hosts.clone()).child(hint(
+                        this.child(self.allowed_hosts.clone()).child(caption(
                             "Hostnames, wildcards, IP addresses or CIDRs, separated by commas.",
                         ))
                     }),
             )
             .child(
                 v_flex()
-                    .gap_1()
-                    .child(section_label("Resources"))
+                    .gap_2()
+                    .child(section_header("Resources", None))
                     .child(
                         h_flex()
-                            .gap_2()
-                            .child(div().flex_1().child(self.cpu_limit.clone()))
-                            .child(div().flex_1().child(self.memory_limit.clone())),
+                            .gap_6()
+                            .child(div().flex_1().child(slider_field(
+                                "CPU cores",
+                                cpu_text,
+                                &self.cpu_slider,
+                                "1",
+                                self.host.cpus.to_string(),
+                            )))
+                            .child(div().flex_1().child(slider_field(
+                                "Memory",
+                                memory_text,
+                                &self.memory_slider,
+                                format_gib(MEMORY_STEP_GIB),
+                                format!("{} total", format_gib(self.host.total_memory_gib())),
+                            ))),
                     )
-                    .child(hint(
-                        "Resource limits are fixed when the sandbox is created.",
+                    .child(caption(format!(
+                        "Resources are fixed when the sandbox is created. A sandbox can use up to \
+                         {} of this Mac's {}: sbx leaves the rest to macOS.",
+                        format_gib(self.host.max_memory_gib()),
+                        format_gib(self.host.total_memory_gib()),
+                    ))),
+            )
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(section_header("Ports", None))
+                    .child(self.ports.clone())
+                    .child(caption(
+                        "Sandbox ports to publish on 127.0.0.1. HOST:SANDBOX fixes the host port.",
                     )),
             )
-            .child(v_flex().gap_1().child(self.ports.clone()).child(hint(
-                "Sandbox ports to publish on 127.0.0.1. HOST:SANDBOX fixes the host port.",
-            )))
     }
 
     fn render_repositories_step(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let source_input = match self.source_kind {
-            SourceKind::LocalRepository => h_flex()
-                .gap_2()
-                .items_end()
-                .child(v_flex().flex_1().child(self.local_path.clone()))
-                .child(
-                    Button::new("browse-local-folder", "Browse…")
-                        .style(ButtonStyle::Outlined)
+        let colors = cx.theme().colors();
+        let source_input = h_flex()
+            .gap_2()
+            .items_center()
+            .child(div().flex_1().child(self.source_field().clone()))
+            .when(self.source_kind == SourceKind::LocalRepository, |this| {
+                this.child(
+                    secondary_button("browse-local-folder", "Browse…")
                         .on_click(cx.listener(|this, _, window, cx| this.browse(window, cx))),
-                ),
-            SourceKind::GitUrl => h_flex()
-                .gap_2()
-                .items_end()
-                .child(v_flex().flex_1().child(self.git_url.clone())),
-        }
-        .child(
-            Button::new("add-repository", "Add")
-                .style(ButtonStyle::Outlined)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.add_repository(window, cx);
-                })),
-        );
+                )
+            })
+            .child(
+                primary_button("add-repository", "Add").on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.add_repository(window, cx);
+                    },
+                )),
+            );
         let source_hint = match self.source_kind {
             SourceKind::LocalRepository => {
-                "Must be a Git repository. The first local repository becomes the sandbox \
-                 workspace, and its commits appear on the host as the sandbox-<name> remote. \
-                 Others are mounted read-only and cloned inside."
+                "The first local repository is the main one: the sandbox works on its private \
+                 clone, and commits reach the host as the sandbox-<name> remote. Other local \
+                 repositories are mounted read-only and cloned inside."
             }
             SourceKind::GitUrl => {
                 "Cloned inside the sandbox. Private repositories need `sbx secret set github`."
             }
         };
         let primary = primary_repository(&self.repositories);
+        let repository_count = self.repositories.len();
 
         v_flex()
-            .gap_3()
+            .gap_5()
             .child(
                 v_flex()
-                    .gap_1()
-                    .child(section_label("Repositories"))
+                    .gap_2()
+                    .child(section_header(
+                        "Repositories",
+                        (repository_count > 0)
+                            .then(|| caption(repository_count.to_string()).into_any_element()),
+                    ))
                     .when(self.repositories.is_empty(), |this| {
-                        this.child(hint("No repositories added yet."))
+                        this.child(
+                            v_flex()
+                                .py_6()
+                                .gap_1()
+                                .items_center()
+                                .rounded_md()
+                                .border_1()
+                                .border_dashed()
+                                .border_color(colors.border)
+                                .child(
+                                    Icon::new(IconName::FolderAdd)
+                                        .size(IconSize::Medium)
+                                        .color(Color::Muted),
+                                )
+                                .child(Label::new("No repositories yet").size(LabelSize::Small))
+                                .child(caption("Add a local folder or a Git URL below.")),
+                        )
                     })
                     .children(self.repositories.iter().enumerate().map(|(index, source)| {
-                        let icon = match source {
-                            ProjectSource::LocalRepository(_) => IconName::Folder,
-                            ProjectSource::GitUrl(_) => IconName::GitBranch,
+                        let (icon, name) = match source {
+                            ProjectSource::LocalRepository(path) => (
+                                IconName::Folder,
+                                path.file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| source.display()),
+                            ),
+                            ProjectSource::GitUrl(url) => (
+                                IconName::GitBranch,
+                                repository_directory_name(url).unwrap_or_else(|| url.clone()),
+                            ),
                         };
-                        ListItem::new(("repository", index))
-                            .spacing(ListItemSpacing::Sparse)
-                            .start_slot(Icon::new(icon).color(Color::Muted))
+                        h_flex()
+                            .px_2p5()
+                            .py_2()
+                            .gap_2p5()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(colors.border)
+                            .bg(colors.surface_background)
+                            .child(Icon::new(icon).size(IconSize::Small).color(Color::Muted))
                             .child(
                                 v_flex()
+                                    .flex_1()
                                     .min_w_0()
-                                    .child(Label::new(source.display()).truncate())
-                                    .when(Some(index) == primary, |this| {
-                                        this.child(hint(
-                                            "Main repository: its commits reach the host",
-                                        ))
-                                    }),
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .child(
+                                                Label::new(name)
+                                                    .size(LabelSize::Small)
+                                                    .weight(FontWeight::MEDIUM),
+                                            )
+                                            .when(Some(index) == primary, |this| {
+                                                this.child(badge("primary", Tone::Info, cx))
+                                            }),
+                                    )
+                                    .child(
+                                        Label::new(source.display())
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Muted)
+                                            .buffer_font(cx)
+                                            .truncate(),
+                                    ),
                             )
-                            .end_slot(
-                                IconButton::new(("remove-repository", index), IconName::Close)
-                                    .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Remove"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                            .child(
+                                icon_button(
+                                    ("remove-repository", index),
+                                    IconName::Close,
+                                    "Remove",
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         if index < this.repositories.len() {
                                             this.repositories.remove(index);
                                         }
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             )
                     })),
             )
             .child(
-                ToggleButtonGroup::single_row(
-                    "project-source",
-                    [
-                        ToggleButtonSimple::new(
-                            "Local Folder",
-                            cx.listener(|this, _, _, cx| {
-                                this.source_kind = SourceKind::LocalRepository;
-                                cx.notify();
-                            }),
-                        ),
-                        ToggleButtonSimple::new(
-                            "Git Repository",
-                            cx.listener(|this, _, _, cx| {
-                                this.source_kind = SourceKind::GitUrl;
-                                cx.notify();
-                            }),
-                        ),
-                    ],
-                )
-                .style(ToggleButtonGroupStyle::Outlined)
-                .auto_width()
-                .selected_index(match self.source_kind {
-                    SourceKind::LocalRepository => 0,
-                    SourceKind::GitUrl => 1,
-                }),
-            )
-            .child(
                 v_flex()
-                    .gap_1()
+                    .gap_2()
+                    .child(section_header("Add a repository", None))
+                    .child(
+                        h_flex().gap_2().children(
+                            [
+                                (
+                                    SourceKind::LocalRepository,
+                                    IconName::Folder,
+                                    "Local folder",
+                                ),
+                                (SourceKind::GitUrl, IconName::Github, "Git URL"),
+                            ]
+                            .into_iter()
+                            .map(|(kind, icon, title)| {
+                                Button::new(SharedString::from(title), title)
+                                    .style(ButtonStyle::Subtle)
+                                    .start_icon(Icon::new(icon).size(IconSize::Small))
+                                    .toggle_state(self.source_kind == kind)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.source_kind = kind;
+                                        this.source_field().focus_handle(cx).focus(window, cx);
+                                        cx.notify();
+                                    }))
+                            }),
+                        ),
+                    )
                     .child(source_input)
-                    .child(hint(source_hint)),
+                    .child(caption(source_hint)),
             )
     }
 
     fn render_agent_step(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .gap_1()
-            .child(section_label("Agent"))
-            .children(AGENTS.iter().enumerate().map(|(index, (_, display_name))| {
-                ListItem::new(("agent", index))
-                    .spacing(ListItemSpacing::Sparse)
-                    .toggle_state(index == self.agent)
-                    .start_slot(
-                        Icon::new(if index == self.agent {
-                            IconName::Check
-                        } else {
-                            IconName::Terminal
-                        })
-                        .color(if index == self.agent {
-                            Color::Accent
-                        } else {
-                            Color::Muted
-                        }),
-                    )
-                    .child(Label::new(*display_name))
+        let cards = AGENTS
+            .iter()
+            .enumerate()
+            .map(|(index, (name, display_name))| {
+                OptionCard::new(("agent", index), agent_icon(name), *display_name)
+                    .description(agent_description(name))
+                    .selected(index == self.agent)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.agent = index;
                         cx.notify();
                     }))
-            }))
-            .child(hint(
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        let mut rows = Vec::new();
+        let mut cards = cards.into_iter();
+        while let Some(first) = cards.next() {
+            let second = cards
+                .next()
+                .unwrap_or_else(|| div().flex_1().into_any_element());
+            rows.push(h_flex().gap_2().items_stretch().child(first).child(second));
+        }
+        v_flex()
+            .gap_2()
+            .child(section_header("Agent", None))
+            .children(rows)
+            .child(caption(
                 "The agent runs only inside the sandbox and signs in through `sbx` secrets.",
             ))
     }
 }
 
-fn section_label(text: &'static str) -> Label {
-    Label::new(text).size(LabelSize::Small).color(Color::Muted)
+pub(crate) fn agent_icon(agent: &str) -> IconName {
+    match agent {
+        "shell" => IconName::Terminal,
+        "claude" => IconName::AiClaude,
+        "codex" => IconName::AiOpenAi,
+        "gemini" => IconName::AiGemini,
+        "opencode" => IconName::AiOpenCode,
+        "copilot" => IconName::Github,
+        "docker-agent" => IconName::Box,
+        _ => IconName::Sparkle,
+    }
 }
 
-fn hint(text: &'static str) -> Label {
-    Label::new(text).size(LabelSize::Small).color(Color::Muted)
+fn agent_description(agent: &str) -> &'static str {
+    match agent {
+        "shell" => "A plain sandbox: terminals and tools, no coding agent.",
+        "claude" => "Anthropic's coding agent.",
+        "codex" => "OpenAI's coding agent.",
+        "copilot" => "GitHub Copilot CLI.",
+        "cursor" => "Cursor's command-line agent.",
+        "gemini" => "Google's Gemini CLI.",
+        "opencode" => "Open-source agent for any model provider.",
+        "kiro" => "Amazon's spec-driven agent.",
+        "devin" => "Cognition's Devin CLI.",
+        "droid" => "Factory's Droid agent.",
+        "docker-agent" => "Docker's agent.",
+        _ => "",
+    }
 }
 
 impl ModalView for NewProjectModal {}
@@ -922,20 +1052,34 @@ impl Render for NewProjectModal {
         let status = match &self.state {
             CreationState::Editing => None,
             CreationState::Creating(message) => Some(
-                Label::new(message.clone())
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Icon::new(IconName::ArrowCircle)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(caption(message.clone())),
             ),
             CreationState::Failed(message) => Some(
-                Label::new(message.clone())
-                    .size(LabelSize::Small)
-                    .color(Color::Error),
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Icon::new(IconName::Warning)
+                            .size(IconSize::Small)
+                            .color(Color::Error),
+                    )
+                    .child(
+                        Label::new(message.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Error),
+                    ),
             ),
         };
-        let (step_number, step_title) = match self.step {
-            Step::Sandbox => (1, "Sandbox"),
-            Step::Repositories => (2, "Repositories"),
-            Step::Agent => (3, "Agent"),
+        let step_index = match self.step {
+            Step::Sandbox => 0,
+            Step::Repositories => 1,
+            Step::Agent => 2,
         };
         let body = match self.step {
             Step::Sandbox => self.render_sandbox_step(cx).into_any_element(),
@@ -944,6 +1088,7 @@ impl Render for NewProjectModal {
         };
         let first_step = self.step == Step::Sandbox;
         let last_step = self.step == Step::Agent;
+        let colors = cx.theme().colors();
 
         v_flex()
             .key_context("NewProjectModal")
@@ -951,25 +1096,48 @@ impl Render for NewProjectModal {
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::confirm))
             .elevation_3(cx)
-            .w(rems(34.))
-            .p_4()
-            .gap_3()
+            .w(rems(46.))
+            .h(rems(46.))
+            .overflow_hidden()
             .child(
-                h_flex()
-                    .justify_between()
-                    .child(Headline::new("New Project").size(HeadlineSize::Small))
+                v_flex()
+                    .px_5()
+                    .pt_4()
+                    .pb_3()
+                    .gap_3()
+                    .border_b_1()
+                    .border_color(colors.border_variant)
                     .child(
-                        Label::new(format!("Step {step_number} of 3 · {step_title}"))
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    ),
+                        v_flex()
+                            .child(Headline::new("New Project").size(HeadlineSize::Small))
+                            .child(caption(
+                                "A sandbox with your repositories and one coding agent.",
+                            )),
+                    )
+                    .child(stepper(
+                        &["Sandbox", "Repositories", "Agent"],
+                        step_index,
+                        cx,
+                    )),
             )
-            .child(body)
-            .children(status)
+            .child(
+                div()
+                    .id("new-project-body")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_5()
+                    .py_4()
+                    .child(body),
+            )
             .child(
                 h_flex()
-                    .justify_end()
+                    .px_5()
+                    .py_3()
                     .gap_2()
+                    .border_t_1()
+                    .border_color(colors.border_variant)
+                    .child(div().flex_1().min_w_0().children(status))
                     .child(if first_step {
                         Button::new("cancel-new-project", "Cancel")
                             .disabled(creating)
@@ -980,11 +1148,14 @@ impl Render for NewProjectModal {
                             .on_click(cx.listener(|this, _, window, cx| this.back(window, cx)))
                     })
                     .child(
-                        Button::new(
+                        primary_button(
                             "next-new-project",
-                            if last_step { "Create" } else { "Next" },
+                            if last_step {
+                                "Create Project"
+                            } else {
+                                "Continue"
+                            },
                         )
-                        .style(ButtonStyle::Filled)
                         .disabled(creating)
                         .on_click(cx.listener(|this, _, window, cx| this.next(window, cx))),
                     ),
@@ -1164,15 +1335,24 @@ mod tests {
     }
 
     #[test]
-    fn validates_resource_limits() {
-        assert_eq!(resource_limits("", ""), Ok((None, None)));
-        assert_eq!(
-            resource_limits("4", "8G"),
-            Ok((Some(4), Some("8g".to_string())))
-        );
-        assert!(resource_limits("0", "8g").is_err());
-        assert!(resource_limits("2.5", "8g").is_err());
-        assert!(resource_limits("4", "8000").is_err());
+    fn maps_sliders_to_sbx_limits() {
+        let host = HostResources {
+            cpus: 14,
+            memory_gib: 24.0,
+        };
+        assert_eq!(host.default_memory_gib(), 12.0);
+        assert_eq!(host.max_memory_gib(), 18.0);
+        assert_eq!(host.total_memory_gib(), 24.0);
+        assert_eq!(host.limits(14.0, 12.0), (None, None));
+        assert_eq!(host.limits(4.0, 8.5), (Some(4), Some("8704m".to_string())));
+        let big = HostResources {
+            cpus: 64,
+            memory_gib: 256.0,
+        };
+        assert_eq!(big.default_memory_gib(), 32.0);
+        assert_eq!(big.max_memory_gib(), 192.0);
+        assert_eq!(format_gib(0.5), "0.5 GB");
+        assert_eq!(format_gib(12.0), "12 GB");
     }
 
     #[test]

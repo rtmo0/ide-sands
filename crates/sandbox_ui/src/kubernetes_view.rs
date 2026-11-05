@@ -17,8 +17,8 @@ use language::BufferEvent;
 use sbx::Sbx;
 use task::{SpawnInTerminal, TaskId};
 use ui::{
-    ContextMenu, DropdownMenu, Indicator, ListItem, ListItemSpacing, Table as UiTable,
-    TableInteractionState, Toggleable as _, Tooltip, prelude::*,
+    ColumnWidthConfig, ContextMenu, DropdownMenu, Indicator, ListItem, ListItemSpacing,
+    Table as UiTable, TableInteractionState, Toggleable as _, Tooltip, prelude::*,
 };
 use ui_input::InputField;
 use util::ResultExt as _;
@@ -43,7 +43,7 @@ actions!(
 );
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
-const SIDEBAR_WIDTH: f32 = 220.;
+const SIDEBAR_WIDTH: f32 = 196.;
 const DETAILS_WIDTH: f32 = 460.;
 
 pub(crate) fn init(cx: &mut App) {
@@ -77,6 +77,10 @@ fn open_kubernetes(workspace: &mut Workspace, window: &mut Window, cx: &mut Cont
     }
     let weak_workspace = workspace.weak_handle();
     let view = cx.new(|cx| KubernetesView::new(weak_workspace, sandbox, window, cx));
+    // The explorer needs the width: tables, the details drawer and the sidebar sit side by side.
+    workspace
+        .right_dock()
+        .update(cx, |dock, cx| dock.set_open(false, window, cx));
     workspace.add_item_to_active_pane(Box::new(view), None, true, window, cx);
 }
 
@@ -1225,6 +1229,24 @@ fn helm_table(releases: &[HelmRelease], kind: &ResourceKind) -> Table {
     }
 }
 
+/// Column widths sized for typical content, so names and statuses are not cut off; the table
+/// scrolls horizontally when they do not fit.
+fn column_width(id: &str) -> f32 {
+    match id {
+        "name" => 300.,
+        "namespace" => 150.,
+        "message" => 420.,
+        "object" | "owner" | "endpoints" | "used" | "subjects" | "hosts" | "selector" => 220.,
+        "node" | "chart" | "image" | "claim" | "provisioner" | "reference" | "targets" => 180.,
+        "status" | "conditions" | "type" | "reason" | "role" | "group" | "storageClass" => 140.,
+        "cpu" | "memory" | "ports" | "clusterIP" | "external" | "ip" | "version" => 130.,
+        "containers" | "pods" | "keys" | "schedule" | "updated" | "lastSeen" | "lastSchedule" => {
+            110.
+        }
+        _ => 90.,
+    }
+}
+
 fn tone_color(tone: Tone) -> Color {
     match tone {
         Tone::Ok => Color::Success,
@@ -1382,7 +1404,7 @@ impl KubernetesView {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut items = v_flex().p_1().gap_px().child(
+        let mut items = v_flex().p_1p5().gap_px().child(
             ListItem::new("kubernetes-overview")
                 .spacing(ListItemSpacing::Sparse)
                 .toggle_state(self.page == Page::Overview)
@@ -1391,7 +1413,7 @@ impl KubernetesView {
                         .size(IconSize::Small)
                         .color(Color::Muted),
                 )
-                .child(Label::new("Overview"))
+                .child(Label::new("Overview").size(LabelSize::Small))
                 .on_click(cx.listener(|this, _, window, cx| this.show(Page::Overview, window, cx))),
         );
         for category in Category::ALL {
@@ -1406,7 +1428,7 @@ impl KubernetesView {
             }
             items = items.child(
                 ListItem::new(SharedString::from(format!("category-{}", category.title())))
-                    .spacing(ListItemSpacing::Sparse)
+                    .spacing(ListItemSpacing::Dense)
                     .start_slot(
                         Icon::new(if collapsed {
                             IconName::ChevronRight
@@ -1417,8 +1439,8 @@ impl KubernetesView {
                         .color(Color::Muted),
                     )
                     .child(
-                        Label::new(category.title())
-                            .size(LabelSize::Small)
+                        Label::new(category.title().to_uppercase())
+                            .size(LabelSize::XSmall)
                             .color(Color::Muted)
                             .weight(gpui::FontWeight::SEMIBOLD),
                     )
@@ -1437,10 +1459,10 @@ impl KubernetesView {
                 let title = kind.title.clone();
                 items = items.child(
                     ListItem::new(SharedString::from(format!("kind-{}", kind.id)))
-                        .spacing(ListItemSpacing::Sparse)
+                        .spacing(ListItemSpacing::Dense)
                         .indent_level(1)
                         .toggle_state(selected)
-                        .child(Label::new(title).truncate())
+                        .child(Label::new(title).size(LabelSize::Small).truncate())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.show(Page::Kind(kind.clone()), window, cx)
                         })),
@@ -1832,6 +1854,16 @@ impl KubernetesView {
             Some(Selection::HelmRelease { name, namespace }) => Some(format!("{namespace}/{name}")),
             None => None,
         };
+        let widths = columns
+            .iter()
+            .filter_map(|index| table.columns.get(*index))
+            .map(|column| column_width(column.id))
+            .collect::<Vec<_>>();
+        let total_width = widths.iter().sum::<f32>();
+        let mut width_config = ColumnWidthConfig::explicit(widths.into_iter().map(px).collect());
+        if let ColumnWidthConfig::Static { table_width, .. } = &mut width_config {
+            *table_width = Some(px(total_width).into());
+        }
         let rows = Arc::new(rows);
         let row_columns = Arc::new(columns.clone());
         let view = cx.entity().downgrade();
@@ -1865,6 +1897,7 @@ impl KubernetesView {
                 div().flex_1().min_h_0().child(
                     UiTable::new(columns.len())
                         .interactable(&self.table_state)
+                        .width_config(width_config)
                         .striped()
                         .header(headers)
                         .empty_table_callback(|_, _| {

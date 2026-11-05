@@ -6940,10 +6940,17 @@ impl ProjectGroupKey {
                 names.push(suffix);
             }
         }
-        if names.is_empty() {
-            "Empty Workspace".into()
-        } else {
-            names.join(", ").into()
+        // A Sands project is a sandbox whose code usually lives in a folder named after the
+        // sandbox image (`workspace`), so the sandbox name is what tells projects apart.
+        let nickname = match &self.host {
+            Some(RemoteConnectionOptions::Ssh(options)) => options.nickname.clone(),
+            _ => None,
+        };
+        match nickname {
+            Some(nickname) if names.is_empty() || names == ["workspace"] => nickname.into(),
+            Some(nickname) => format!("{nickname} · {}", names.join(", ")).into(),
+            None if names.is_empty() => "Empty Workspace".into(),
+            None => names.join(", ").into(),
         }
     }
 

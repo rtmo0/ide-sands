@@ -25,6 +25,7 @@ use workspace::{
     with_active_or_new_workspace,
 };
 
+mod design;
 mod kubernetes_view;
 mod new_project_modal;
 mod projects_panel;

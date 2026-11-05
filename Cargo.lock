@@ -15762,6 +15762,7 @@ dependencies = [
  "remote",
  "sbx",
  "smol",
+ "sysinfo 0.39.6",
  "task",
  "ui",
  "ui_input",

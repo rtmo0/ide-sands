@@ -1,21 +1,22 @@
 use gpui::{
     Action, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, Pixels, SharedString, StatefulInteractiveElement as _, Task,
-    WeakEntity, actions, px,
+    FontWeight, Pixels, SharedString, Task, WeakEntity, actions, px,
 };
 use sbx::{SandboxInfo, SandboxStatus};
-use ui::{
-    ActiveTheme as _, Button, ButtonCommon as _, Clickable as _, Color, Context, IconButton,
-    IconName, IconSize, Indicator, IntoElement, Label, LabelCommon as _, LabelSize, ListItem,
-    ListItemSpacing, ParentElement, Render, Styled, Toggleable, Tooltip, Window, h_flex, v_flex,
-};
+use ui::prelude::*;
 use util::ResultExt as _;
 use workspace::{
     OpenMode, Workspace,
     dock::{DockPosition, Panel, PanelEvent, PanelSizeState},
 };
 
-use crate::{connected_sandbox, list_sandboxes, new_project_modal::NewProjectModal, open_sandbox};
+use crate::{
+    connected_sandbox,
+    design::{Tone, caption, icon_button, primary_button, status_dot},
+    list_sandboxes,
+    new_project_modal::{NewProjectModal, agent_icon},
+    open_sandbox,
+};
 
 actions!(
     sands,
@@ -62,6 +63,8 @@ pub struct ProjectsPanel {
     focus_handle: FocusHandle,
     position: DockPosition,
     projects: ProjectList,
+    /// The project being opened: switching takes a while, so its row says so.
+    opening: Option<String>,
     _refresh: Task<()>,
 }
 
@@ -78,6 +81,7 @@ impl ProjectsPanel {
                     focus_handle: cx.focus_handle(),
                     position: DockPosition::Left,
                     projects: ProjectList::Loading,
+                    opening: None,
                     _refresh: Task::ready(()),
                 };
                 panel.refresh(window, cx);
@@ -101,33 +105,42 @@ impl ProjectsPanel {
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let count = match &self.projects {
+            ProjectList::Loaded(sandboxes) => Some(sandboxes.len()),
+            _ => None,
+        };
         h_flex()
-            .px_3()
-            .py_2()
+            .h(px(36.))
+            .pl_3()
+            .pr_1p5()
             .justify_between()
             .border_b_1()
             .border_color(cx.theme().colors().border_variant)
             .child(
-                Label::new("PROJECTS")
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
+                h_flex()
+                    .gap_1p5()
+                    .child(
+                        Label::new("Projects")
+                            .size(LabelSize::Small)
+                            .weight(FontWeight::SEMIBOLD),
+                    )
+                    .children(count.map(|count| {
+                        Label::new(count.to_string())
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted)
+                    })),
             )
             .child(
                 h_flex()
-                    .gap_1()
+                    .gap_0p5()
                     .child(
-                        IconButton::new("refresh-projects", IconName::RotateCw)
-                            .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Refresh"))
+                        icon_button("refresh-projects", IconName::RotateCw, "Refresh")
                             .on_click(cx.listener(|this, _, window, cx| this.refresh(window, cx))),
                     )
                     .child(
-                        IconButton::new("new-project", IconName::Plus)
-                            .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("New Project"))
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(NewProject.boxed_clone(), cx)
-                            }),
+                        icon_button("new-project", IconName::Plus, "New Project").on_click(
+                            |_, window, cx| window.dispatch_action(NewProject.boxed_clone(), cx),
+                        ),
                     ),
             )
     }
@@ -135,11 +148,7 @@ impl ProjectsPanel {
     fn render_projects(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let sandboxes = match &self.projects {
             ProjectList::Loading => {
-                return v_flex().p_3().child(
-                    Label::new("Loading projects…")
-                        .size(LabelSize::Small)
-                        .color(Color::Muted),
-                );
+                return v_flex().p_3().child(caption("Loading projects…"));
             }
             ProjectList::Failed(message) => {
                 return v_flex().p_3().child(
@@ -150,16 +159,27 @@ impl ProjectsPanel {
             }
             ProjectList::Loaded(sandboxes) if sandboxes.is_empty() => {
                 return v_flex()
-                    .p_3()
-                    .gap_2()
+                    .p_4()
+                    .gap_3()
+                    .items_center()
                     .child(
-                        Label::new("No projects yet.")
-                            .size(LabelSize::Small)
+                        Icon::new(IconName::Server)
+                            .size(IconSize::Medium)
                             .color(Color::Muted),
                     )
-                    .child(Button::new("create-first-project", "New Project").on_click(
-                        |_, window, cx| window.dispatch_action(NewProject.boxed_clone(), cx),
-                    ));
+                    .child(
+                        v_flex()
+                            .items_center()
+                            .child(Label::new("No projects yet").size(LabelSize::Small))
+                            .child(caption(
+                                "A project is a sandbox with your code and an agent.",
+                            )),
+                    )
+                    .child(
+                        primary_button("create-first-project", "New Project").on_click(
+                            |_, window, cx| window.dispatch_action(NewProject.boxed_clone(), cx),
+                        ),
+                    );
             }
             ProjectList::Loaded(sandboxes) => sandboxes,
         };
@@ -168,51 +188,95 @@ impl ProjectsPanel {
             .workspace
             .upgrade()
             .and_then(|workspace| connected_sandbox(workspace.read(cx), cx));
+        let colors = cx.theme().colors();
+        let now = chrono::Utc::now();
 
         v_flex()
-            .p_2()
-            .gap_1()
+            .p_1p5()
+            .gap_px()
             .children(sandboxes.iter().enumerate().map(|(index, sandbox)| {
-                let (status, status_color) = match sandbox.status {
-                    SandboxStatus::Running => ("running", Color::Success),
-                    SandboxStatus::Stopped => ("stopped", Color::Muted),
-                    SandboxStatus::Unknown => ("unknown", Color::Warning),
+                let selected = current.as_deref() == Some(sandbox.name.as_str());
+                let opening = !selected && self.opening.as_deref() == Some(sandbox.name.as_str());
+                let tone = match sandbox.status {
+                    SandboxStatus::Running => Tone::Ok,
+                    SandboxStatus::Stopped => Tone::Muted,
+                    SandboxStatus::Unknown => Tone::Warn,
                 };
+                let last_used = sandbox
+                    .last_used_at
+                    .as_deref()
+                    .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+                    .map(|time| kubernetes::format_age(time.with_timezone(&chrono::Utc), now));
+                let repositories = sandbox
+                    .workspaces
+                    .iter()
+                    .filter_map(|path| std::path::Path::new(path).file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                let mut details = vec![crate::agent_display_name(&sandbox.agent).to_string()];
+                details.extend(repositories);
                 let name = sandbox.name.clone();
-                ListItem::new(("project", index))
-                    .inset(true)
-                    .spacing(ListItemSpacing::Sparse)
-                    .toggle_state(current.as_deref() == Some(sandbox.name.as_str()))
-                    .start_slot(ui::Icon::new(IconName::Server).color(
-                        if current.as_deref() == Some(sandbox.name.as_str()) {
-                            Color::Accent
-                        } else {
-                            Color::Muted
-                        },
-                    ))
+                let hover = colors.ghost_element_hover;
+                h_flex()
+                    .id(("project", index))
+                    .px_2()
+                    .py_1p5()
+                    .gap_2()
+                    .items_start()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .when(selected, |this| this.bg(colors.ghost_element_selected))
+                    .when(!selected, |this| this.hover(move |style| style.bg(hover)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.opening = Some(name.clone());
+                        cx.notify();
+                        open_sandbox(name.clone(), None, OpenMode::Activate, window, cx)
+                    }))
+                    .child(div().pt(px(5.)).child(status_dot(tone, cx)))
                     .child(
                         v_flex()
+                            .flex_1()
                             .min_w_0()
-                            .child(Label::new(sandbox.name.clone()).truncate())
+                            .gap_0p5()
                             .child(
-                                Label::new(crate::agent_display_name(&sandbox.agent).to_string())
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
+                                h_flex()
+                                    .gap_2()
+                                    .justify_between()
+                                    .child(
+                                        Label::new(sandbox.name.clone())
+                                            .size(LabelSize::Small)
+                                            .weight(if selected {
+                                                FontWeight::SEMIBOLD
+                                            } else {
+                                                FontWeight::MEDIUM
+                                            })
+                                            .truncate(),
+                                    )
+                                    .children(last_used.filter(|_| !opening).map(|age| {
+                                        Label::new(age).size(LabelSize::XSmall).color(Color::Muted)
+                                    })),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .min_w_0()
+                                    .child(
+                                        Icon::new(agent_icon(&sandbox.agent))
+                                            .size(IconSize::XSmall)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(
+                                        Label::new(if opening {
+                                            "Connecting…".to_string()
+                                        } else {
+                                            details.join(" · ")
+                                        })
+                                        .size(LabelSize::XSmall)
+                                        .color(if opening { Color::Accent } else { Color::Muted })
+                                        .truncate(),
+                                    ),
                             ),
                     )
-                    .end_slot(
-                        h_flex()
-                            .gap_1()
-                            .child(Indicator::dot().color(status_color))
-                            .child(
-                                Label::new(status)
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            ),
-                    )
-                    .on_click(move |_, window, cx| {
-                        open_sandbox(name.clone(), None, OpenMode::Activate, window, cx)
-                    })
             }))
     }
 }

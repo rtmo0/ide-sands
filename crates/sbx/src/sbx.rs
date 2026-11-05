@@ -72,6 +72,9 @@ pub struct SandboxInfo {
     pub id: String,
     pub agent: String,
     pub status: SandboxStatus,
+    /// Host directories mounted into the sandbox.
+    #[serde(default)]
+    pub workspaces: Vec<String>,
     #[serde(default)]
     pub last_used_at: Option<String>,
     #[serde(default)]
