@@ -120,6 +120,7 @@ members = [
     "crates/install_cli",
     "crates/journal",
     "crates/json_schema_store",
+    "crates/kubernetes",
     "crates/keymap_editor",
     "crates/language",
     "crates/language_core",
@@ -397,6 +398,7 @@ inspector_ui = { path = "crates/inspector_ui" }
 install_cli = { path = "crates/install_cli" }
 journal = { path = "crates/journal" }
 json_schema_store = { path = "crates/json_schema_store" }
+kubernetes = { path = "crates/kubernetes" }
 keymap_editor = { path = "crates/keymap_editor" }
 language = { path = "crates/language" }
 language_core = { path = "crates/language_core" }
@@ -1093,17 +1095,17 @@ debug = "full"
 [profile.dbg.build-override]
 debug = "full"
 
-[profile.dev.package]
-# proc-macros start
 # The dbg profile is meant for stepping into anything, so it keeps the debug
 # info that profile.dev drops for third-party crates.
 [profile.dbg.package."*"]
 debug = "full"
 
-gpui_macros = { opt-level = 3 }
+[profile.dev.package]
 # Third-party crates are rarely stepped into, and their debug info is most of
 # target/debug. "*" does not match workspace members, which keep it.
 "*" = { debug = false }
+# proc-macros start
+gpui_macros = { opt-level = 3 }
 derive_refineable = { opt-level = 3 }
 feature_flags_macros = { opt-level = 3 }
 settings_macros = { opt-level = 3 }

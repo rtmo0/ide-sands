@@ -9396,6 +9396,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kubernetes"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "dirs",
+ "paths",
+ "sbx",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "url",
+]
+
+[[package]]
 name = "kurbo"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15733,6 +15749,7 @@ dependencies = [
  "futures 0.3.34",
  "fuzzy_nucleo",
  "gpui",
+ "kubernetes",
  "menu",
  "picker",
  "project",
@@ -15740,6 +15757,7 @@ dependencies = [
  "remote",
  "sbx",
  "smol",
+ "task",
  "ui",
  "ui_input",
  "util",

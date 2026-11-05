@@ -1,25 +1,44 @@
 use std::path::PathBuf;
 
-use anyhow::Context as _;
 use gpui::{
     App, AppContext as _, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
-    PathPromptOptions, SharedString, Task, WeakEntity,
+    PathPromptOptions, SharedString, Task, WeakEntity, prelude::FluentBuilder as _,
 };
-use sbx::{CreateOptions, Sbx};
+use sbx::{CreateOptions, NetworkMode, Sbx};
 use ui::{
     Button, ButtonCommon as _, ButtonStyle, Clickable as _, Color, Context, Disableable as _,
-    Headline, HeadlineSize, InteractiveElement, IntoElement, Label, LabelCommon as _, LabelSize,
-    ParentElement, Render, Styled, StyledExt, ToggleButtonGroup, ToggleButtonGroupStyle,
-    ToggleButtonSimple, Window, h_flex, rems, v_flex,
+    Headline, HeadlineSize, Icon, IconButton, IconName, IconSize, InteractiveElement, IntoElement,
+    Label, LabelCommon as _, LabelSize, ListItem, ListItemSpacing, ParentElement, Render, Styled,
+    StyledExt, ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Toggleable as _,
+    Tooltip, Window, div, h_flex, rems, v_flex,
 };
 use ui_input::InputField;
 use util::ResultExt as _;
 use workspace::{ModalView, OpenMode, Workspace};
 
-use crate::{open_sandbox, projects_panel::ProjectsPanel};
+use crate::{open_sandbox, projects_panel::ProjectsPanel, sandbox_panel::parse_port_mapping};
 
-/// Sandboxes for projects run the plain `shell` agent; coding agents are added per project later.
-const PROJECT_AGENT: &str = "shell";
+/// Built-in `sbx` agents, by the name `sbx create` takes and the name shown to the user.
+const AGENTS: [(&str, &str); 11] = [
+    ("shell", "No agent (shell only)"),
+    ("claude", "Claude Code"),
+    ("codex", "Codex"),
+    ("copilot", "GitHub Copilot"),
+    ("cursor", "Cursor"),
+    ("gemini", "Gemini CLI"),
+    ("opencode", "OpenCode"),
+    ("kiro", "Kiro"),
+    ("devin", "Devin"),
+    ("droid", "Droid"),
+    ("docker-agent", "Docker Agent"),
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Sandbox,
+    Repositories,
+    Agent,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SourceKind {
@@ -27,9 +46,47 @@ enum SourceKind {
     GitUrl,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ProjectSource {
     LocalRepository(PathBuf),
     GitUrl(String),
+}
+
+impl ProjectSource {
+    fn display(&self) -> String {
+        match self {
+            ProjectSource::LocalRepository(path) => path.to_string_lossy().into_owned(),
+            ProjectSource::GitUrl(url) => url.clone(),
+        }
+    }
+
+    /// The folder a clone of the repository gets inside the sandbox workspace.
+    fn clone_directory_name(&self) -> Option<String> {
+        repository_directory_name(&self.display())
+    }
+}
+
+/// The first local repository becomes the sandbox workspace instead of being cloned into it.
+fn primary_repository(repositories: &[ProjectSource]) -> Option<usize> {
+    repositories
+        .iter()
+        .position(|source| matches!(source, ProjectSource::LocalRepository(_)))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SandboxSettings {
+    network_mode: NetworkMode,
+    allowed_hosts: Vec<String>,
+    cpus: Option<u32>,
+    memory: Option<String>,
+    publish: Vec<String>,
+}
+
+struct ProjectPlan {
+    name: String,
+    agent: &'static str,
+    settings: SandboxSettings,
+    repositories: Vec<ProjectSource>,
 }
 
 enum CreationState {
@@ -40,10 +97,19 @@ enum CreationState {
 
 pub(crate) struct NewProjectModal {
     workspace: WeakEntity<Workspace>,
+    focus_handle: FocusHandle,
+    step: Step,
     name: Entity<InputField>,
+    network_mode: NetworkMode,
+    allowed_hosts: Entity<InputField>,
+    cpu_limit: Entity<InputField>,
+    memory_limit: Entity<InputField>,
+    ports: Entity<InputField>,
+    repositories: Vec<ProjectSource>,
     source_kind: SourceKind,
     local_path: Entity<InputField>,
     git_url: Entity<InputField>,
+    agent: usize,
     state: CreationState,
     _task: Option<Task<()>>,
 }
@@ -55,29 +121,168 @@ impl NewProjectModal {
         cx: &mut Context<Self>,
     ) -> Self {
         let name = cx.new(|cx| {
-            InputField::new(window, cx, "Defaults to the repository name")
+            InputField::new(window, cx, "Defaults to the first repository's name")
                 .label("Project name")
                 .tab_index(1)
+        });
+        let allowed_hosts = cx.new(|cx| {
+            InputField::new(window, cx, "api.example.com, *.internal.example.com")
+                .label("Also allow")
+                .tab_index(2)
+        });
+        let cpu_limit = cx.new(|cx| {
+            InputField::new(window, cx, "Auto")
+                .label("CPUs")
+                .tab_index(3)
+        });
+        let memory_limit = cx.new(|cx| {
+            InputField::new(window, cx, "Auto, e.g. 8g")
+                .label("Memory")
+                .tab_index(4)
+        });
+        let ports = cx.new(|cx| {
+            InputField::new(window, cx, "3000, 8080:80")
+                .label("Published ports")
+                .tab_index(5)
         });
         let local_path = cx.new(|cx| {
             InputField::new(window, cx, "/path/to/git/repository")
                 .label("Local folder")
-                .tab_index(2)
+                .tab_index(1)
         });
         let git_url = cx.new(|cx| {
             InputField::new(window, cx, "https://github.com/owner/repository.git")
                 .label("Git URL")
-                .tab_index(2)
+                .tab_index(1)
         });
         Self {
             workspace,
+            focus_handle: cx.focus_handle(),
+            step: Step::Sandbox,
             name,
+            network_mode: NetworkMode::Balanced,
+            allowed_hosts,
+            cpu_limit,
+            memory_limit,
+            ports,
+            repositories: Vec::new(),
             source_kind: SourceKind::LocalRepository,
             local_path,
             git_url,
+            agent: 0,
             state: CreationState::Editing,
             _task: None,
         }
+    }
+
+    fn fail(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.state = CreationState::Failed(message.into());
+        cx.notify();
+    }
+
+    fn sandbox_settings(&self, cx: &App) -> Result<SandboxSettings, String> {
+        let (cpus, memory) = resource_limits(
+            self.cpu_limit.read(cx).text(cx).trim(),
+            self.memory_limit.read(cx).text(cx).trim(),
+        )?;
+        let allowed_hosts = if self.network_mode == NetworkMode::AllowAll {
+            Vec::new()
+        } else {
+            split_list(&self.allowed_hosts.read(cx).text(cx))
+        };
+        Ok(SandboxSettings {
+            network_mode: self.network_mode,
+            allowed_hosts,
+            cpus,
+            memory,
+            publish: port_mappings(&self.ports.read(cx).text(cx))?,
+        })
+    }
+
+    fn go_to(&mut self, step: Step, window: &mut Window, cx: &mut Context<Self>) {
+        self.step = step;
+        self.state = CreationState::Editing;
+        match step {
+            Step::Sandbox => self.name.focus_handle(cx).focus(window, cx),
+            Step::Repositories => self.source_field().focus_handle(cx).focus(window, cx),
+            Step::Agent => self.focus_handle.focus(window, cx),
+        }
+        cx.notify();
+    }
+
+    fn next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.step {
+            Step::Sandbox => {
+                let typed_name = self.name.read(cx).text(cx);
+                let typed_name = typed_name.trim();
+                let validation = self.sandbox_settings(cx).map(|_| ()).and_then(|()| {
+                    match typed_name.is_empty() {
+                        true => Ok(()),
+                        false => validate_name(typed_name),
+                    }
+                });
+                match validation {
+                    Ok(()) => self.go_to(Step::Repositories, window, cx),
+                    Err(message) => self.fail(message, cx),
+                }
+            }
+            Step::Repositories => {
+                // A source typed but not yet added is what the user means to continue with.
+                if !self.source_field().read(cx).text(cx).trim().is_empty()
+                    && !self.add_repository(window, cx)
+                {
+                    return;
+                }
+                match validate_repositories(&self.repositories) {
+                    Ok(()) => self.go_to(Step::Agent, window, cx),
+                    Err(message) => self.fail(message, cx),
+                }
+            }
+            Step::Agent => self.create(window, cx),
+        }
+    }
+
+    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.step {
+            Step::Sandbox => {}
+            Step::Repositories => self.go_to(Step::Sandbox, window, cx),
+            Step::Agent => self.go_to(Step::Repositories, window, cx),
+        }
+    }
+
+    fn source_field(&self) -> &Entity<InputField> {
+        match self.source_kind {
+            SourceKind::LocalRepository => &self.local_path,
+            SourceKind::GitUrl => &self.git_url,
+        }
+    }
+
+    /// Adds the typed source to the list and returns whether it was accepted.
+    fn add_repository(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let text = self.source_field().read(cx).text(cx).trim().to_string();
+        let source = match self.source_kind {
+            SourceKind::LocalRepository => {
+                let path = PathBuf::from(&text);
+                if !path.is_absolute() {
+                    self.fail("Choose a local folder by its full path", cx);
+                    return false;
+                }
+                ProjectSource::LocalRepository(path)
+            }
+            SourceKind::GitUrl => ProjectSource::GitUrl(text),
+        };
+        let mut repositories = self.repositories.clone();
+        repositories.push(source);
+        if let Err(message) = validate_repositories(&repositories) {
+            self.fail(message, cx);
+            return false;
+        }
+        self.repositories = repositories;
+        self.source_field()
+            .update(cx, |field, cx| field.clear(window, cx));
+        self.state = CreationState::Editing;
+        cx.notify();
+        true
     }
 
     fn browse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -91,11 +296,8 @@ impl NewProjectModal {
             let selected = match paths.await {
                 Ok(Ok(paths)) => paths.and_then(|paths| paths.into_iter().next()),
                 Ok(Err(error)) => {
-                    this.update(cx, |this, cx| {
-                        this.state = CreationState::Failed(format!("{error:#}").into());
-                        cx.notify();
-                    })
-                    .log_err();
+                    this.update(cx, |this, cx| this.fail(format!("{error:#}"), cx))
+                        .log_err();
                     None
                 }
                 // The dialog was dismissed without a result.
@@ -106,6 +308,7 @@ impl NewProjectModal {
                     let path = path.to_string_lossy().into_owned();
                     this.local_path
                         .update(cx, |field, cx| field.set_text(&path, window, cx));
+                    this.add_repository(window, cx);
                 })
                 .log_err();
             }
@@ -116,29 +319,34 @@ impl NewProjectModal {
         if matches!(self.state, CreationState::Creating(_)) {
             return;
         }
-        let source = match self.source_kind {
-            SourceKind::LocalRepository => ProjectSource::LocalRepository(PathBuf::from(
-                self.local_path.read(cx).text(cx).trim(),
-            )),
-            SourceKind::GitUrl => {
-                ProjectSource::GitUrl(self.git_url.read(cx).text(cx).trim().to_string())
-            }
+        let settings = match self.sandbox_settings(cx) {
+            Ok(settings) => settings,
+            Err(message) => return self.fail(message, cx),
         };
-        let name = match project_name(self.name.read(cx).text(cx).trim(), &source) {
+        if let Err(message) = validate_repositories(&self.repositories) {
+            return self.fail(message, cx);
+        }
+        let name = match project_name(
+            self.name.read(cx).text(cx).trim(),
+            self.repositories.first(),
+        ) {
             Ok(name) => name,
-            Err(message) => {
-                self.state = CreationState::Failed(message.into());
-                cx.notify();
-                return;
-            }
+            Err(message) => return self.fail(message, cx),
+        };
+        let Some((agent, _)) = AGENTS.get(self.agent) else {
+            return self.fail("Choose an agent", cx);
+        };
+        let plan = ProjectPlan {
+            name: name.clone(),
+            agent,
+            settings,
+            repositories: self.repositories.clone(),
         };
 
         self.state = CreationState::Creating("Creating the sandbox and fetching the code…".into());
         cx.notify();
         self._task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_spawn(create_project(name.clone(), source))
-                .await;
+            let result = cx.background_spawn(create_project(plan)).await;
             match result {
                 Ok(directory) => {
                     set_up_toolchains(&this, &name, cx).await;
@@ -154,11 +362,8 @@ impl NewProjectModal {
                     .log_err();
                 }
                 Err(error) => {
-                    this.update(cx, |this, cx| {
-                        this.state = CreationState::Failed(format!("{error:#}").into());
-                        cx.notify();
-                    })
-                    .log_err();
+                    this.update(cx, |this, cx| this.fail(format!("{error:#}"), cx))
+                        .log_err();
                 }
             }
         }));
@@ -214,57 +419,16 @@ async fn set_up_toolchains(
     .log_err();
 }
 
-impl NewProjectModal {
-    fn cancel(&mut self, _: &menu::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(DismissEvent);
-    }
-
-    fn confirm(&mut self, _: &menu::Confirm, window: &mut Window, cx: &mut Context<Self>) {
-        self.create(window, cx);
-    }
-
-    fn render_source(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        match self.source_kind {
-            SourceKind::LocalRepository => v_flex()
-                .gap_1()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_end()
-                        .child(v_flex().flex_1().child(self.local_path.clone()))
-                        .child(
-                            Button::new("browse-local-folder", "Browse…")
-                                .style(ButtonStyle::Outlined)
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.browse(window, cx)),
-                                ),
-                        ),
-                )
-                .child(
-                    Label::new(
-                        "Must be a Git repository. The sandbox works on its own clone; its \
-                         commits appear in this repository as the sandbox-<name> remote.",
-                    )
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-                ),
-            SourceKind::GitUrl => v_flex().gap_1().child(self.git_url.clone()).child(
-                Label::new(
-                    "Cloned inside the sandbox. Private repositories need `sbx secret set github`.",
-                )
-                .size(LabelSize::Small)
-                .color(Color::Muted),
-            ),
-        }
-    }
-}
-
-/// Creates the sandbox, brings the code into it and returns the directory to open.
-async fn create_project(name: String, source: ProjectSource) -> anyhow::Result<String> {
+/// Creates the sandbox with its network policy, brings every repository into it and returns
+/// the directory to open. The first local repository becomes the sandbox workspace, a private
+/// clone whose commits reach the host through the `sandbox-<name>` remote. Other local
+/// repositories are mounted read-only and cloned inside, like Git URLs, so the sandbox cannot
+/// write to the host.
+async fn create_project(plan: ProjectPlan) -> anyhow::Result<String> {
     let sbx = Sbx::locate()?;
     sbx.check().await?;
-    match source {
-        ProjectSource::LocalRepository(path) => {
+    for source in &plan.repositories {
+        if let ProjectSource::LocalRepository(path) = source {
             anyhow::ensure!(
                 path.is_absolute() && path.is_dir(),
                 "{} is not a folder",
@@ -275,64 +439,183 @@ async fn create_project(name: String, source: ProjectSource) -> anyhow::Result<S
                 "{} is not a Git repository. Run `git init` in it first.",
                 path.display()
             );
-            sbx.create(&CreateOptions {
-                name: name.clone(),
-                agent: PROJECT_AGENT.to_string(),
-                workspaces: vec![path],
-                clone_workspace: true,
-                ..Default::default()
-            })
-            .await?;
-            Ok(sbx.default_directory(&name).await?)
         }
-        ProjectSource::GitUrl(url) => {
-            let directory_name = repository_directory_name(&url)
-                .with_context(|| format!("cannot derive a folder name from {url:?}"))?;
-            sbx.create(&CreateOptions {
-                name: name.clone(),
-                agent: PROJECT_AGENT.to_string(),
-                ..Default::default()
-            })
-            .await?;
-            let target = format!("{}/{directory_name}", sbx.default_directory(&name).await?);
-            let output = sbx
-                .exec(
-                    &name,
-                    &["git", "clone", "--", url.as_str(), target.as_str()],
-                )
-                .await?;
-            if output.status.success() {
-                return Ok(target);
-            }
-            let clone_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            // The sandbox was created for this clone only, so remove it instead of leaving an
-            // empty project behind.
-            match sbx.remove(&name).await {
-                Ok(()) => anyhow::bail!("git clone failed: {clone_error}"),
-                Err(remove_error) => anyhow::bail!(
-                    "git clone failed: {clone_error}. Removing sandbox {name} also failed: {remove_error}"
-                ),
+    }
+    sbx.scope_network_policy_to_sandboxes().await?;
+
+    let primary = primary_repository(&plan.repositories);
+    let (workspaces, read_only_workspaces) = plan
+        .repositories
+        .iter()
+        .enumerate()
+        .filter_map(|(index, source)| match source {
+            ProjectSource::LocalRepository(path) => Some((index, path.clone())),
+            ProjectSource::GitUrl(_) => None,
+        })
+        .partition::<Vec<_>, _>(|(index, _)| Some(*index) == primary);
+    let settings = &plan.settings;
+    sbx.create(&CreateOptions {
+        name: plan.name.clone(),
+        agent: plan.agent.to_string(),
+        workspaces: workspaces.into_iter().map(|(_, path)| path).collect(),
+        clone_workspace: primary.is_some(),
+        read_only_workspaces: read_only_workspaces
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect(),
+        publish: settings.publish.clone(),
+        cpus: settings.cpus,
+        memory: settings.memory.clone(),
+        ..Default::default()
+    })
+    .await?;
+
+    match set_up_project(&sbx, &plan, primary).await {
+        Ok(directory) => Ok(directory),
+        Err(error) => {
+            // The sandbox exists only for this project, so a half-configured one is removed
+            // and the user can fix the settings and create it again.
+            match sbx.remove(&plan.name).await {
+                Ok(()) => Err(error),
+                Err(remove_error) => Err(anyhow::anyhow!(
+                    "{error:#}. Removing sandbox {} also failed: {remove_error}",
+                    plan.name
+                )),
             }
         }
     }
 }
 
-/// Uses the typed name, or derives one from the source, and checks it against `sbx` naming rules.
-fn project_name(typed: &str, source: &ProjectSource) -> Result<String, String> {
+async fn set_up_project(
+    sbx: &Sbx,
+    plan: &ProjectPlan,
+    primary: Option<usize>,
+) -> anyhow::Result<String> {
+    let settings = &plan.settings;
+    sbx.apply_network_mode(&plan.name, settings.network_mode, &settings.allowed_hosts)
+        .await?;
+    let workspace = sbx.default_directory(&plan.name).await?;
+    let mut directories = Vec::new();
+    if primary.is_some() {
+        directories.push(workspace.clone());
+    }
+    for (index, source) in plan.repositories.iter().enumerate() {
+        if Some(index) == primary {
+            continue;
+        }
+        match sbx.clone_repository(&plan.name, &source.display()).await {
+            Ok(directory) => directories.push(directory),
+            Err(error)
+                if matches!(source, ProjectSource::GitUrl(_))
+                    && settings.network_mode != NetworkMode::AllowAll =>
+            {
+                anyhow::bail!(
+                    "{error}. If the host is blocked, allow it in the project's network settings."
+                )
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    // Other repositories are cloned inside the workspace, so it holds all of them.
+    Ok(match directories.as_slice() {
+        [single] => single.clone(),
+        _ => workspace,
+    })
+}
+
+fn split_list(text: &str) -> Vec<String> {
+    text.split(|character: char| character == ',' || character.is_whitespace())
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn port_mappings(text: &str) -> Result<Vec<String>, String> {
+    split_list(text)
+        .into_iter()
+        .map(|item| match parse_port_mapping(&item) {
+            Some((Some(host_port), sandbox_port)) => Ok(format!("{host_port}:{sandbox_port}")),
+            Some((None, sandbox_port)) => Ok(sandbox_port.to_string()),
+            None => Err(format!(
+                "{item:?} is not a port. Use 3000, or 8080:3000 for a fixed host port."
+            )),
+        })
+        .collect()
+}
+
+fn resource_limits(
+    cpu_limit: &str,
+    memory_limit: &str,
+) -> Result<(Option<u32>, Option<String>), String> {
+    let cpus = if cpu_limit.is_empty() {
+        None
+    } else {
+        let cpus = cpu_limit
+            .parse::<u32>()
+            .map_err(|_| "CPU limit must be a positive whole number".to_string())?;
+        if cpus == 0 {
+            return Err("CPU limit must be greater than zero".to_string());
+        }
+        Some(cpus)
+    };
+    let memory = if memory_limit.is_empty() {
+        None
+    } else {
+        let normalized = memory_limit.to_ascii_lowercase();
+        let (amount, unit) = normalized.split_at(normalized.len().saturating_sub(1));
+        let valid = !amount.is_empty()
+            && amount.chars().all(|character| character.is_ascii_digit())
+            && matches!(unit, "k" | "m" | "g" | "t");
+        if !valid {
+            return Err("Memory limit must use binary units, for example 512m or 8g".to_string());
+        }
+        Some(normalized)
+    };
+    Ok((cpus, memory))
+}
+
+/// Every cloned repository needs a distinct folder inside the sandbox workspace.
+fn validate_repositories(repositories: &[ProjectSource]) -> Result<(), String> {
+    if repositories.is_empty() {
+        return Err("Add at least one repository".to_string());
+    }
+    let primary = primary_repository(repositories);
+    let mut directory_names = collections::HashSet::default();
+    for (index, source) in repositories.iter().enumerate() {
+        if let ProjectSource::GitUrl(url) = source
+            && url.is_empty()
+        {
+            return Err("Enter a Git URL".to_string());
+        }
+        if Some(index) == primary {
+            continue;
+        }
+        let directory_name = source.clone_directory_name().ok_or_else(|| {
+            format!(
+                "Cannot derive a folder name from {:?}: use letters, digits, '-', '_' and '.'",
+                source.display()
+            )
+        })?;
+        if !directory_names.insert(directory_name.clone()) {
+            return Err(format!(
+                "Two repositories would share the folder {directory_name:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Uses the typed name, or derives one from the first repository, and checks it against `sbx`
+/// naming rules.
+fn project_name(typed: &str, first: Option<&ProjectSource>) -> Result<String, String> {
     let name = if typed.is_empty() {
-        let derived = match source {
-            ProjectSource::LocalRepository(path) if path.as_os_str().is_empty() => {
-                return Err("Choose a local folder".to_string());
-            }
-            ProjectSource::GitUrl(url) if url.is_empty() => {
-                return Err("Enter a Git URL".to_string());
-            }
-            ProjectSource::LocalRepository(path) => path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned()),
-            ProjectSource::GitUrl(url) => repository_directory_name(url),
-        };
-        derived
+        first
+            .and_then(|source| match source {
+                ProjectSource::LocalRepository(path) => path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned()),
+                ProjectSource::GitUrl(url) => repository_directory_name(url),
+            })
             .map(|name| sanitize_name(&name))
             .ok_or_else(|| "Enter a project name".to_string())?
     } else {
@@ -392,43 +675,169 @@ fn repository_directory_name(url: &str) -> Option<String> {
     safe.then(|| name.to_string())
 }
 
-impl ModalView for NewProjectModal {}
-
-impl EventEmitter<DismissEvent> for NewProjectModal {}
-
-impl Focusable for NewProjectModal {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.name.focus_handle(cx)
+impl NewProjectModal {
+    fn cancel(&mut self, _: &menu::Cancel, _: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.state, CreationState::Creating(_)) {
+            cx.emit(DismissEvent);
+        }
     }
-}
 
-impl Render for NewProjectModal {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let creating = matches!(self.state, CreationState::Creating(_));
-        let status = match &self.state {
-            CreationState::Editing => None,
-            CreationState::Creating(message) => Some(
-                Label::new(message.clone())
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            ),
-            CreationState::Failed(message) => Some(
-                Label::new(message.clone())
-                    .size(LabelSize::Small)
-                    .color(Color::Error),
-            ),
+    fn confirm(&mut self, _: &menu::Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        self.next(window, cx);
+    }
+
+    fn render_sandbox_step(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mode_description = match self.network_mode {
+            NetworkMode::AllowAll => "The sandbox can reach any host.",
+            NetworkMode::Balanced => {
+                "Git hosting, package registries, toolchain downloads, container registries and \
+                 model providers."
+            }
+            NetworkMode::DenyAll => {
+                "No outbound traffic except the agent's own provider and the hosts allowed below."
+            }
         };
+        v_flex()
+            .gap_3()
+            .child(self.name.clone())
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(section_label("Network"))
+                    .child(
+                        ToggleButtonGroup::single_row(
+                            "network-mode",
+                            [
+                                ToggleButtonSimple::new(
+                                    "Allow All",
+                                    cx.listener(|this, _, _, cx| {
+                                        this.network_mode = NetworkMode::AllowAll;
+                                        cx.notify();
+                                    }),
+                                ),
+                                ToggleButtonSimple::new(
+                                    "Balanced",
+                                    cx.listener(|this, _, _, cx| {
+                                        this.network_mode = NetworkMode::Balanced;
+                                        cx.notify();
+                                    }),
+                                ),
+                                ToggleButtonSimple::new(
+                                    "Deny All",
+                                    cx.listener(|this, _, _, cx| {
+                                        this.network_mode = NetworkMode::DenyAll;
+                                        cx.notify();
+                                    }),
+                                ),
+                            ],
+                        )
+                        .style(ToggleButtonGroupStyle::Outlined)
+                        .auto_width()
+                        .selected_index(match self.network_mode {
+                            NetworkMode::AllowAll => 0,
+                            NetworkMode::Balanced => 1,
+                            NetworkMode::DenyAll => 2,
+                        }),
+                    )
+                    .child(hint(mode_description))
+                    .when(self.network_mode != NetworkMode::AllowAll, |this| {
+                        this.child(self.allowed_hosts.clone()).child(hint(
+                            "Hostnames, wildcards, IP addresses or CIDRs, separated by commas.",
+                        ))
+                    }),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(section_label("Resources"))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().flex_1().child(self.cpu_limit.clone()))
+                            .child(div().flex_1().child(self.memory_limit.clone())),
+                    )
+                    .child(hint(
+                        "Resource limits are fixed when the sandbox is created.",
+                    )),
+            )
+            .child(v_flex().gap_1().child(self.ports.clone()).child(hint(
+                "Sandbox ports to publish on 127.0.0.1. HOST:SANDBOX fixes the host port.",
+            )))
+    }
+
+    fn render_repositories_step(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let source_input = match self.source_kind {
+            SourceKind::LocalRepository => h_flex()
+                .gap_2()
+                .items_end()
+                .child(v_flex().flex_1().child(self.local_path.clone()))
+                .child(
+                    Button::new("browse-local-folder", "Browse…")
+                        .style(ButtonStyle::Outlined)
+                        .on_click(cx.listener(|this, _, window, cx| this.browse(window, cx))),
+                ),
+            SourceKind::GitUrl => h_flex()
+                .gap_2()
+                .items_end()
+                .child(v_flex().flex_1().child(self.git_url.clone())),
+        }
+        .child(
+            Button::new("add-repository", "Add")
+                .style(ButtonStyle::Outlined)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.add_repository(window, cx);
+                })),
+        );
+        let source_hint = match self.source_kind {
+            SourceKind::LocalRepository => {
+                "Must be a Git repository. The first local repository becomes the sandbox \
+                 workspace, and its commits appear on the host as the sandbox-<name> remote. \
+                 Others are mounted read-only and cloned inside."
+            }
+            SourceKind::GitUrl => {
+                "Cloned inside the sandbox. Private repositories need `sbx secret set github`."
+            }
+        };
+        let primary = primary_repository(&self.repositories);
 
         v_flex()
-            .key_context("NewProjectModal")
-            .on_action(cx.listener(Self::cancel))
-            .on_action(cx.listener(Self::confirm))
-            .elevation_3(cx)
-            .w(rems(34.))
-            .p_4()
             .gap_3()
-            .child(Headline::new("New Project").size(HeadlineSize::Small))
-            .child(self.name.clone())
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(section_label("Repositories"))
+                    .when(self.repositories.is_empty(), |this| {
+                        this.child(hint("No repositories added yet."))
+                    })
+                    .children(self.repositories.iter().enumerate().map(|(index, source)| {
+                        let icon = match source {
+                            ProjectSource::LocalRepository(_) => IconName::Folder,
+                            ProjectSource::GitUrl(_) => IconName::GitBranch,
+                        };
+                        ListItem::new(("repository", index))
+                            .spacing(ListItemSpacing::Sparse)
+                            .start_slot(Icon::new(icon).color(Color::Muted))
+                            .child(
+                                v_flex()
+                                    .min_w_0()
+                                    .child(Label::new(source.display()).truncate())
+                                    .when(Some(index) == primary, |this| {
+                                        this.child(hint("Sandbox workspace"))
+                                    }),
+                            )
+                            .end_slot(
+                                IconButton::new(("remove-repository", index), IconName::Close)
+                                    .icon_size(IconSize::Small)
+                                    .tooltip(Tooltip::text("Remove"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if index < this.repositories.len() {
+                                            this.repositories.remove(index);
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                    })),
+            )
             .child(
                 ToggleButtonGroup::single_row(
                     "project-source",
@@ -456,21 +865,139 @@ impl Render for NewProjectModal {
                     SourceKind::GitUrl => 1,
                 }),
             )
-            .child(self.render_source(cx))
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(source_input)
+                    .child(hint(source_hint)),
+            )
+    }
+
+    fn render_agent_step(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .gap_1()
+            .child(section_label("Agent"))
+            .children(AGENTS.iter().enumerate().map(|(index, (_, display_name))| {
+                ListItem::new(("agent", index))
+                    .spacing(ListItemSpacing::Sparse)
+                    .toggle_state(index == self.agent)
+                    .start_slot(
+                        Icon::new(if index == self.agent {
+                            IconName::Check
+                        } else {
+                            IconName::Terminal
+                        })
+                        .color(if index == self.agent {
+                            Color::Accent
+                        } else {
+                            Color::Muted
+                        }),
+                    )
+                    .child(Label::new(*display_name))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.agent = index;
+                        cx.notify();
+                    }))
+            }))
+            .child(hint(
+                "The agent runs only inside the sandbox and signs in through `sbx` secrets.",
+            ))
+    }
+}
+
+fn section_label(text: &'static str) -> Label {
+    Label::new(text).size(LabelSize::Small).color(Color::Muted)
+}
+
+fn hint(text: &'static str) -> Label {
+    Label::new(text).size(LabelSize::Small).color(Color::Muted)
+}
+
+impl ModalView for NewProjectModal {}
+
+impl EventEmitter<DismissEvent> for NewProjectModal {}
+
+impl Focusable for NewProjectModal {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match self.step {
+            Step::Sandbox => self.name.focus_handle(cx),
+            Step::Repositories => self.source_field().focus_handle(cx),
+            Step::Agent => self.focus_handle.clone(),
+        }
+    }
+}
+
+impl Render for NewProjectModal {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let creating = matches!(self.state, CreationState::Creating(_));
+        let status = match &self.state {
+            CreationState::Editing => None,
+            CreationState::Creating(message) => Some(
+                Label::new(message.clone())
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            ),
+            CreationState::Failed(message) => Some(
+                Label::new(message.clone())
+                    .size(LabelSize::Small)
+                    .color(Color::Error),
+            ),
+        };
+        let (step_number, step_title) = match self.step {
+            Step::Sandbox => (1, "Sandbox"),
+            Step::Repositories => (2, "Repositories"),
+            Step::Agent => (3, "Agent"),
+        };
+        let body = match self.step {
+            Step::Sandbox => self.render_sandbox_step(cx).into_any_element(),
+            Step::Repositories => self.render_repositories_step(cx).into_any_element(),
+            Step::Agent => self.render_agent_step(cx).into_any_element(),
+        };
+        let first_step = self.step == Step::Sandbox;
+        let last_step = self.step == Step::Agent;
+
+        v_flex()
+            .key_context("NewProjectModal")
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::cancel))
+            .on_action(cx.listener(Self::confirm))
+            .elevation_3(cx)
+            .w(rems(34.))
+            .p_4()
+            .gap_3()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(Headline::new("New Project").size(HeadlineSize::Small))
+                    .child(
+                        Label::new(format!("Step {step_number} of 3 · {step_title}"))
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+            .child(body)
             .children(status)
             .child(
                 h_flex()
                     .justify_end()
                     .gap_2()
-                    .child(
+                    .child(if first_step {
                         Button::new("cancel-new-project", "Cancel")
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent))),
-                    )
-                    .child(
-                        Button::new("create-project", "Create")
-                            .style(ButtonStyle::Filled)
                             .disabled(creating)
-                            .on_click(cx.listener(|this, _, window, cx| this.create(window, cx))),
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent)))
+                    } else {
+                        Button::new("back-new-project", "Back")
+                            .disabled(creating)
+                            .on_click(cx.listener(|this, _, window, cx| this.back(window, cx)))
+                    })
+                    .child(
+                        Button::new(
+                            "next-new-project",
+                            if last_step { "Create" } else { "Next" },
+                        )
+                        .style(ButtonStyle::Filled)
+                        .disabled(creating)
+                        .on_click(cx.listener(|this, _, window, cx| this.next(window, cx))),
                     ),
             )
     }
@@ -482,6 +1009,52 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+    fn plan(name: &str, repositories: Vec<ProjectSource>) -> ProjectPlan {
+        ProjectPlan {
+            name: name.to_string(),
+            agent: "shell",
+            settings: SandboxSettings {
+                network_mode: NetworkMode::Balanced,
+                allowed_hosts: Vec::new(),
+                cpus: None,
+                memory: None,
+                publish: vec!["18080:8080".to_string()],
+            },
+            repositories,
+        }
+    }
+
+    fn init_repository(path: &std::path::Path) -> TestResult {
+        if path.exists() {
+            std::fs::remove_dir_all(path)?;
+        }
+        std::fs::create_dir_all(path)?;
+        std::fs::write(path.join("README.md"), "local\n")?;
+        let git = |arguments: &[&str]| {
+            smol::block_on(
+                util::command::new_command("git")
+                    .args(arguments)
+                    .current_dir(path)
+                    .status(),
+            )
+        };
+        assert!(git(&["init", "-q"])?.success());
+        assert!(git(&["add", "."])?.success());
+        assert!(
+            git(&[
+                "-c",
+                "user.name=Sands",
+                "-c",
+                "user.email=sands@example.com",
+                "commit",
+                "-qm",
+                "Initial commit",
+            ])?
+            .success()
+        );
+        Ok(())
+    }
+
     /// Creates and removes real sandboxes: `cargo test -p sandbox_ui -- --ignored`.
     #[test]
     #[ignore]
@@ -489,10 +1062,12 @@ mod tests {
         smol::block_on(async {
             let sbx = Sbx::locate()?;
 
-            let directory = create_project(
-                "sands-test-git".to_string(),
-                ProjectSource::GitUrl("https://github.com/octocat/Hello-World.git".to_string()),
-            )
+            let directory = create_project(plan(
+                "sands-test-git",
+                vec![ProjectSource::GitUrl(
+                    "https://github.com/octocat/Hello-World.git".to_string(),
+                )],
+            ))
             .await;
             let listing = sbx
                 .exec(
@@ -500,33 +1075,72 @@ mod tests {
                     &["ls", directory.as_deref().unwrap_or("/")],
                 )
                 .await;
+            let blocked = sbx
+                .exec(
+                    "sands-test-git",
+                    &[
+                        "curl",
+                        "-s",
+                        "-o",
+                        "/dev/null",
+                        "-w",
+                        "%{http_code}",
+                        "https://example.com",
+                    ],
+                )
+                .await;
+            let ports = sbx.ports("sands-test-git").await;
             sbx.remove("sands-test-git").await?;
             let directory = directory?;
             assert!(directory.ends_with("/Hello-World"), "{directory}");
             assert!(String::from_utf8_lossy(&listing?.stdout).contains("README"));
+            assert_eq!(String::from_utf8_lossy(&blocked?.stdout), "403");
+            assert!(ports?.iter().any(|port| port.sandbox_port == 8080));
 
-            let repository = std::env::temp_dir().join("sands-test-local-repository");
-            if repository.exists() {
-                std::fs::remove_dir_all(&repository)?;
-            }
-            std::fs::create_dir_all(&repository)?;
-            std::fs::write(repository.join("README.md"), "local\n")?;
-            let initialized = util::command::new_command("git")
-                .args(["init", "-q"])
-                .current_dir(&repository)
-                .status()
-                .await?;
-            assert!(initialized.success());
-            let repository = repository.canonicalize()?;
+            let root = std::env::temp_dir().join("sands-test-local-repositories");
+            let primary = root.join("primary");
+            let secondary = root.join("secondary");
+            init_repository(&primary)?;
+            init_repository(&secondary)?;
+            let primary = primary.canonicalize()?;
+            let secondary = secondary.canonicalize()?;
 
-            let directory = create_project(
-                "sands-test-local".to_string(),
-                ProjectSource::LocalRepository(repository.clone()),
-            )
+            let directory = create_project(plan(
+                "sands-test-local",
+                vec![
+                    ProjectSource::LocalRepository(primary.clone()),
+                    ProjectSource::LocalRepository(secondary.clone()),
+                ],
+            ))
             .await;
+            let nested = format!("{}/secondary/README.md", primary.display());
+            let nested_listing = sbx.exec("sands-test-local", &["cat", &nested]).await;
+            let status = sbx
+                .exec(
+                    "sands-test-local",
+                    &[
+                        "git",
+                        "-C",
+                        &primary.to_string_lossy(),
+                        "status",
+                        "--porcelain",
+                    ],
+                )
+                .await;
+            let host_write = sbx
+                .exec(
+                    "sands-test-local",
+                    &["touch", &format!("{}/written", secondary.display())],
+                )
+                .await;
             sbx.remove("sands-test-local").await?;
-            std::fs::remove_dir_all(&repository)?;
-            assert_eq!(directory?, repository.to_string_lossy());
+            let host_untouched = !secondary.join("written").exists();
+            std::fs::remove_dir_all(&root)?;
+            assert_eq!(directory?, primary.to_string_lossy());
+            assert_eq!(String::from_utf8_lossy(&nested_listing?.stdout), "local\n");
+            assert_eq!(String::from_utf8_lossy(&status?.stdout), "");
+            assert!(!host_write?.status.success());
+            assert!(host_untouched);
             Ok(())
         })
     }
@@ -561,26 +1175,89 @@ mod tests {
     }
 
     #[test]
-    fn derives_project_names_from_sources() {
+    fn validates_resource_limits() {
+        assert_eq!(resource_limits("", ""), Ok((None, None)));
+        assert_eq!(
+            resource_limits("4", "8G"),
+            Ok((Some(4), Some("8g".to_string())))
+        );
+        assert!(resource_limits("0", "8g").is_err());
+        assert!(resource_limits("2.5", "8g").is_err());
+        assert!(resource_limits("4", "8000").is_err());
+    }
+
+    #[test]
+    fn parses_port_lists_and_hosts() {
+        assert_eq!(port_mappings(""), Ok(Vec::new()));
+        assert_eq!(
+            port_mappings("3000, 8080:80 5173"),
+            Ok(vec![
+                "3000".to_string(),
+                "8080:80".to_string(),
+                "5173".to_string()
+            ])
+        );
+        assert!(port_mappings("3000, web").is_err());
+        assert_eq!(
+            split_list(" api.example.com,*.example.org  10.0.0.0/8 "),
+            ["api.example.com", "*.example.org", "10.0.0.0/8"]
+        );
+    }
+
+    #[test]
+    fn validates_repository_lists() {
+        assert!(validate_repositories(&[]).is_err());
+        assert!(validate_repositories(&[ProjectSource::GitUrl(String::new())]).is_err());
+        assert!(
+            validate_repositories(&[
+                ProjectSource::LocalRepository(PathBuf::from("/work/api")),
+                ProjectSource::GitUrl("https://github.com/owner/web.git".into()),
+            ])
+            .is_ok()
+        );
+        assert!(
+            validate_repositories(&[
+                ProjectSource::GitUrl("https://github.com/owner/api.git".into()),
+                ProjectSource::GitUrl("https://gitlab.com/group/api".into()),
+            ])
+            .is_err()
+        );
+        assert!(
+            validate_repositories(&[ProjectSource::LocalRepository(PathBuf::from(
+                "/work/My Repo"
+            ))])
+            .is_ok()
+        );
+        assert!(
+            validate_repositories(&[
+                ProjectSource::LocalRepository(PathBuf::from("/work/api")),
+                ProjectSource::LocalRepository(PathBuf::from("/work/My Docs")),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn derives_project_names_from_the_first_repository() {
         assert_eq!(
             project_name(
                 "",
-                &ProjectSource::GitUrl("https://github.com/rtmo0/IDE_Sands.git".into())
+                Some(&ProjectSource::GitUrl(
+                    "https://github.com/rtmo0/IDE_Sands.git".into()
+                ))
             ),
             Ok("ide-sands".to_string())
         );
         assert_eq!(
             project_name(
                 "",
-                &ProjectSource::LocalRepository(PathBuf::from("/work/My Repo"))
+                Some(&ProjectSource::LocalRepository(PathBuf::from(
+                    "/work/My Repo"
+                )))
             ),
             Ok("my-repo".to_string())
         );
-        assert_eq!(
-            project_name("custom", &ProjectSource::GitUrl(String::new())),
-            Ok("custom".to_string())
-        );
-        assert!(project_name("", &ProjectSource::GitUrl(String::new())).is_err());
-        assert!(project_name("", &ProjectSource::LocalRepository(PathBuf::new())).is_err());
+        assert_eq!(project_name("custom", None), Ok("custom".to_string()));
+        assert!(project_name("", None).is_err());
     }
 }

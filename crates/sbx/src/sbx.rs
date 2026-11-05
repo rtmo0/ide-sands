@@ -145,6 +145,87 @@ pub struct PolicyRule {
     pub status: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetworkDecision {
+    Allow,
+    Deny,
+}
+
+/// What a sandbox may reach on top of `sbx`'s default deny-all policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NetworkMode {
+    AllowAll,
+    #[default]
+    Balanced,
+    DenyAll,
+}
+
+/// Development traffic for the languages Sands supports, modeled on the `sbx` balanced policy:
+/// Git hosting, package registries, toolchain downloads, OS packages, container registries,
+/// model providers and certificate checks.
+pub const BALANCED_NETWORK_HOSTS: &[&str] = &[
+    "github.com",
+    "**.github.com",
+    "**.githubusercontent.com",
+    "gitlab.com",
+    "**.gitlab.com",
+    "bitbucket.org",
+    "go.dev",
+    "dl.google.com",
+    "golang.org",
+    "proxy.golang.org",
+    "sum.golang.org",
+    "pypi.org",
+    "**.pythonhosted.org",
+    "bootstrap.pypa.io",
+    "astral.sh",
+    "nodejs.org",
+    "npmjs.org",
+    "registry.npmjs.org",
+    "yarnpkg.com",
+    "**.yarnpkg.com",
+    "deb.nodesource.com",
+    "crates.io",
+    "**.crates.io",
+    "rustup.rs",
+    "sh.rustup.rs",
+    "static.rust-lang.org",
+    "pub.dev",
+    "pub.dartlang.org",
+    "storage.googleapis.com",
+    "nuget.org",
+    "**.nuget.org",
+    "dot.net",
+    "**.dot.net",
+    "dotnet.microsoft.com",
+    "**.dotnet.microsoft.com",
+    "packages.microsoft.com",
+    "apt.llvm.org",
+    "archive.ubuntu.com",
+    "security.ubuntu.com",
+    "ports.ubuntu.com",
+    "docker.io",
+    "**.docker.io",
+    "docker.com",
+    "**.docker.com",
+    "ghcr.io",
+    "mcr.microsoft.com",
+    "api.anthropic.com",
+    "**.anthropic.com",
+    "claude.ai",
+    "**.claude.ai",
+    "api.openai.com",
+    "**.openai.com",
+    "chatgpt.com",
+    "**.chatgpt.com",
+    "generativelanguage.googleapis.com",
+    "**.githubcopilot.com",
+    "openrouter.ai",
+    "**.lencr.org",
+    "**.digicert.com",
+    "**.pki.goog",
+];
+
 /// Resource limits a sandbox was created with. `None` means the `sbx` default
 /// (all host CPUs, half of the host memory).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -413,6 +494,10 @@ pub struct CreateOptions {
     /// clone inside the sandbox (`--clone`). Its commits reach the host through the
     /// `sandbox-<name>` Git remote.
     pub clone_workspace: bool,
+    /// Host directories mounted read-only at their host paths.
+    pub read_only_workspaces: Vec<PathBuf>,
+    /// Port mappings in `sbx create --publish` syntax, e.g. `8080` or `3000:3000`.
+    pub publish: Vec<String>,
     pub template: Option<String>,
     pub cpus: Option<u32>,
     pub memory: Option<String>,
@@ -559,6 +644,71 @@ impl Sbx {
         Ok(output)
     }
 
+    pub async fn copy_to(
+        &self,
+        name: &str,
+        source: &Path,
+        destination: &str,
+    ) -> Result<(), SbxError> {
+        let sandbox_destination = format!("{name}:{destination}");
+        self.run_success_os(&[
+            OsString::from("cp"),
+            source.as_os_str().to_os_string(),
+            OsString::from(sandbox_destination),
+        ])
+        .await
+    }
+
+    /// Stores a host-side bearer token whose placeholder is replaced only for requests from one
+    /// sandbox to one host. `value_file` must remain readable after this returns because `sbx`
+    /// invokes the resolver again when it refreshes the secret.
+    pub async fn set_custom_secret_from_file(
+        &self,
+        name: &str,
+        host: &str,
+        placeholder: &str,
+        value_file: &Path,
+    ) -> Result<(), SbxError> {
+        let value_file = value_file.to_string_lossy();
+        if value_file.contains('\'') {
+            return Err(SbxError::CommandFailed {
+                command: "sbx secret set-custom".to_string(),
+                message: "the secret file path contains an unsupported quote".to_string(),
+            });
+        }
+        let resolver = format!("/bin/cat '{value_file}'");
+        self.run_success(&[
+            "secret",
+            "set-custom",
+            "--sandbox",
+            name,
+            "--host",
+            host,
+            "--placeholder",
+            placeholder,
+            "--command",
+            &resolver,
+        ])
+        .await
+    }
+
+    pub async fn remove_custom_secret(
+        &self,
+        name: &str,
+        placeholder: &str,
+    ) -> Result<(), SbxError> {
+        self.run_success(&[
+            "secret",
+            "rm",
+            "--sandbox",
+            name,
+            "--placeholder",
+            placeholder,
+            "--force",
+        ])
+        .await
+    }
+
     pub async fn ports(&self, name: &str) -> Result<Vec<PublishedPort>, SbxError> {
         self.run_json(&["ports", name, "--json"]).await
     }
@@ -604,6 +754,139 @@ impl Sbx {
     /// Network and filesystem rules that apply to the sandbox, global ones included.
     pub async fn policy_rules(&self, name: &str) -> Result<PolicyRules, SbxError> {
         self.run_json(&["policy", "ls", name, "--json"]).await
+    }
+
+    /// Adds a network rule scoped to one sandbox.
+    pub async fn add_network_rule(
+        &self,
+        name: &str,
+        decision: NetworkDecision,
+        resource: &str,
+    ) -> Result<(), SbxError> {
+        let decision = match decision {
+            NetworkDecision::Allow => "allow",
+            NetworkDecision::Deny => "deny",
+        };
+        self.run_success(&["policy", decision, "network", "--sandbox", name, resource])
+            .await
+    }
+
+    /// Allows what `mode` permits plus `allowed_hosts`. Denied traffic needs no rules because
+    /// [`Self::scope_network_policy_to_sandboxes`] leaves `sbx`'s default deny-all in place.
+    pub async fn apply_network_mode(
+        &self,
+        name: &str,
+        mode: NetworkMode,
+        allowed_hosts: &[String],
+    ) -> Result<(), SbxError> {
+        let mode_hosts: &[&str] = match mode {
+            NetworkMode::AllowAll => &["**"],
+            NetworkMode::Balanced => BALANCED_NETWORK_HOSTS,
+            NetworkMode::DenyAll => &[],
+        };
+        let hosts = mode_hosts
+            .iter()
+            .copied()
+            .chain(allowed_hosts.iter().map(String::as_str))
+            .collect::<Vec<_>>();
+        if hosts.is_empty() {
+            return Ok(());
+        }
+        self.add_network_rule(name, NetworkDecision::Allow, &hosts.join(","))
+            .await
+    }
+
+    /// A global allow-all rule (the `sbx` default) would override every sandbox's own allow
+    /// list, because a sandbox deny rule for `**` also blocks its own allow rules. This moves
+    /// that rule onto each existing sandbox, so they keep their access, and removes it, so new
+    /// sandboxes start from the default deny-all and get only the rules Sands gives them.
+    pub async fn scope_network_policy_to_sandboxes(&self) -> Result<(), SbxError> {
+        let policy: PolicyRules = self.run_json(&["policy", "ls", "--json"]).await?;
+        let global_allow_all = policy
+            .rules
+            .into_iter()
+            .filter(|rule| {
+                rule.resource_type == "network"
+                    && rule.decision == "allow"
+                    && rule.scope.as_deref() == Some("global")
+                    && rule.resources == ["**"]
+            })
+            .collect::<Vec<_>>();
+        if global_allow_all.is_empty() {
+            return Ok(());
+        }
+        for sandbox in self.list().await? {
+            self.add_network_rule(&sandbox.name, NetworkDecision::Allow, "**")
+                .await?;
+        }
+        for rule in global_allow_all {
+            self.run_success(&["policy", "rm", "network", "--id", &rule.id, "--force"])
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Removes a network rule scoped to one sandbox. Global policy rules cannot be removed here.
+    pub async fn remove_network_rule(&self, name: &str, rule_id: &str) -> Result<(), SbxError> {
+        self.run_success(&[
+            "policy",
+            "rm",
+            "network",
+            "--sandbox",
+            name,
+            "--id",
+            rule_id,
+            "--force",
+        ])
+        .await
+    }
+
+    /// Clones a Git repository (a URL, or a host path mounted into the sandbox) into the sandbox
+    /// workspace and returns the clone's path.
+    pub async fn clone_repository(&self, name: &str, source: &str) -> Result<String, SbxError> {
+        let directory_name =
+            repository_directory_name(source).ok_or_else(|| SbxError::CommandFailed {
+                command: "git clone".to_string(),
+                message: format!("cannot derive a safe directory name from {source:?}"),
+            })?;
+        let workspace = self.default_directory(name).await?;
+        let target = format!("{workspace}/{directory_name}");
+        let output = self
+            .exec(name, &["git", "clone", "--", source, target.as_str()])
+            .await?;
+        if !output.status.success() {
+            return Err(SbxError::CommandFailed {
+                command: format!("git clone {source}"),
+                message: first_error_line(&output.stderr)
+                    .unwrap_or_else(|| "git clone failed without error output".to_string()),
+            });
+        }
+        // With `--clone` the workspace is itself a repository, and the nested clone would show
+        // up in it as untracked files.
+        let exclude_entry = format!("/{directory_name}/");
+        let output = self
+            .exec(
+                name,
+                &[
+                    "sh",
+                    "-c",
+                    "exclude=$(git -C \"$1\" rev-parse --git-path info/exclude 2>/dev/null) || exit 0; \
+                     cd \"$1\" && mkdir -p \"$(dirname \"$exclude\")\" && \
+                     { grep -qxF \"$2\" \"$exclude\" 2>/dev/null || echo \"$2\" >> \"$exclude\"; }",
+                    "sh",
+                    workspace.as_str(),
+                    exclude_entry.as_str(),
+                ],
+            )
+            .await?;
+        if !output.status.success() {
+            return Err(SbxError::CommandFailed {
+                command: format!("exclude {directory_name} from {workspace}"),
+                message: first_error_line(&output.stderr)
+                    .unwrap_or_else(|| "updating info/exclude failed".to_string()),
+            });
+        }
+        Ok(target)
     }
 
     /// Collects resources, listening ports, repositories and agents from inside the sandbox.
@@ -683,6 +966,30 @@ impl Sbx {
         parse_json(&display_command(arguments), &output.stdout)
     }
 
+    async fn run_success(&self, arguments: &[&str]) -> Result<(), SbxError> {
+        let output = self.run(arguments).await?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(classify_failure(
+                &display_command(arguments),
+                &output.stderr,
+            ))
+        }
+    }
+
+    async fn run_success_os(&self, arguments: &[OsString]) -> Result<(), SbxError> {
+        let output = self.run(arguments).await?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(classify_failure(
+                &display_command(arguments),
+                &output.stderr,
+            ))
+        }
+    }
+
     async fn run_lifecycle(&self, arguments: &[&str]) -> Result<(), SbxError> {
         let output = self.run(arguments).await?;
         let command = display_command(arguments);
@@ -750,6 +1057,19 @@ fn toolchain_install_script(toolchains: &[Toolchain]) -> String {
         script.push('\n');
     }
     script
+}
+
+fn repository_directory_name(url: &str) -> Option<String> {
+    let trimmed = url.trim().trim_end_matches('/');
+    let last = trimmed.rsplit(['/', ':']).next()?;
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    let safe = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        });
+    safe.then(|| name.to_string())
 }
 
 fn parse_probe(output: &str) -> SandboxProbe {
@@ -872,6 +1192,9 @@ fn create_arguments(options: &CreateOptions) -> Vec<OsString> {
     for (key, value) in &options.environment {
         arguments.extend(["--env".into(), format!("{key}={value}").into()]);
     }
+    for mapping in &options.publish {
+        arguments.extend(["--publish".into(), mapping.into()]);
+    }
     if options.clone_workspace {
         arguments.push("--clone".into());
     }
@@ -882,13 +1205,21 @@ fn create_arguments(options: &CreateOptions) -> Vec<OsString> {
             .iter()
             .map(|workspace| workspace.as_os_str().to_os_string()),
     );
+    arguments.extend(options.read_only_workspaces.iter().map(|workspace| {
+        let mut argument = workspace.as_os_str().to_os_string();
+        argument.push(":ro");
+        argument
+    }));
     arguments
 }
 
 fn parse_json<T: DeserializeOwned>(command: &str, stdout: &[u8]) -> Result<T, SbxError> {
-    serde_json::from_slice(stdout).map_err(|source| SbxError::InvalidOutput {
-        command: command.to_string(),
-        source,
+    // `sbx` occasionally prints an update notice after an otherwise valid JSON response.
+    T::deserialize(&mut serde_json::Deserializer::from_slice(stdout)).map_err(|source| {
+        SbxError::InvalidOutput {
+            command: command.to_string(),
+            source,
+        }
     })
 }
 
@@ -1015,6 +1346,20 @@ mod tests {
     }
 
     #[test]
+    fn derives_safe_repository_directory_names() {
+        assert_eq!(
+            repository_directory_name("https://github.com/owner/service-api.git"),
+            Some("service-api".to_string())
+        );
+        assert_eq!(
+            repository_directory_name("git@github.com:owner/web_app.git"),
+            Some("web_app".to_string())
+        );
+        assert_eq!(repository_directory_name("https://example.com/../"), None);
+        assert_eq!(repository_directory_name(""), None);
+    }
+
+    #[test]
     fn parses_network_log_and_policy_rules() -> TestResult {
         let log: NetworkLog = parse_json(
             "sbx policy log",
@@ -1047,6 +1392,11 @@ mod tests {
             info.server.and_then(|server| server.state),
             Some("running".to_string())
         );
+        let info: VersionInfo = parse_json(
+            "sbx version",
+            b"{\"client\":{\"version\":\"v0.50.1\"}}\nA newer sbx version is available\n",
+        )?;
+        assert_eq!(info.client.version, "v0.50.1");
         Ok(())
     }
 
@@ -1163,6 +1513,8 @@ mod tests {
             memory: Some("8g".to_string()),
             environment: vec![("KEY".to_string(), "value".to_string())],
             clone_workspace: true,
+            read_only_workspaces: vec![PathBuf::from("/work/docs")],
+            publish: vec!["8080".to_string(), "3000:3000".to_string()],
             template: None,
         });
         let arguments: Vec<String> = arguments
@@ -1182,9 +1534,14 @@ mod tests {
                 "8g",
                 "--env",
                 "KEY=value",
+                "--publish",
+                "8080",
+                "--publish",
+                "3000:3000",
                 "--clone",
                 "shell",
-                "/work/repo"
+                "/work/repo",
+                "/work/docs:ro"
             ]
         );
     }
