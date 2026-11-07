@@ -13,6 +13,7 @@ use ui::{Tooltip, prelude::*};
 pub(crate) enum Tone {
     Ok,
     Warn,
+    Error,
     Info,
     Muted,
 }
@@ -22,6 +23,7 @@ impl Tone {
         match self {
             Tone::Ok => Color::Success,
             Tone::Warn => Color::Warning,
+            Tone::Error => Color::Error,
             Tone::Info => Color::Accent,
             Tone::Muted => Color::Muted,
         }
@@ -32,6 +34,7 @@ impl Tone {
         match self {
             Tone::Ok => status.success,
             Tone::Warn => status.warning,
+            Tone::Error => status.error,
             Tone::Info => status.info,
             Tone::Muted => cx.theme().colors().text_muted,
         }
@@ -42,6 +45,7 @@ impl Tone {
         match self {
             Tone::Ok => (status.success_background, status.success_border),
             Tone::Warn => (status.warning_background, status.warning_border),
+            Tone::Error => (status.error_background, status.error_border),
             Tone::Info => (status.info_background, status.info_border),
             Tone::Muted => (
                 cx.theme().colors().element_background,
@@ -96,6 +100,106 @@ pub(crate) fn badge(text: impl Into<SharedString>, tone: Tone, cx: &App) -> impl
 /// A row of muted secondary text.
 pub(crate) fn caption(text: impl Into<SharedString>) -> Label {
     Label::new(text).size(LabelSize::Small).color(Color::Muted)
+}
+
+/// A key on the left, its value on the right, as in an inspector.
+pub(crate) fn key_value(key: impl Into<SharedString>, value: impl IntoElement) -> impl IntoElement {
+    h_flex()
+        .min_h_6()
+        .gap_3()
+        .justify_between()
+        .child(caption(key))
+        .child(div().min_w_0().child(value))
+}
+
+/// A thin progress bar: a share of a total, with an optional label and caption.
+#[derive(IntoElement)]
+pub(crate) struct Meter {
+    label: Option<SharedString>,
+    value_text: Option<SharedString>,
+    caption: Option<SharedString>,
+    fraction: f32,
+    tone: Tone,
+}
+
+impl Meter {
+    pub(crate) fn new(fraction: f32) -> Self {
+        Self {
+            label: None,
+            value_text: None,
+            caption: None,
+            fraction: fraction.clamp(0., 1.),
+            tone: Tone::Info,
+        }
+    }
+
+    pub(crate) fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub(crate) fn value_text(mut self, value: impl Into<SharedString>) -> Self {
+        self.value_text = Some(value.into());
+        self
+    }
+
+    pub(crate) fn caption(mut self, caption: impl Into<SharedString>) -> Self {
+        self.caption = Some(caption.into());
+        self
+    }
+
+    /// Green below 75%, yellow up to 90%, red above, like usage limits.
+    pub(crate) fn usage_tone(mut self) -> Self {
+        self.tone = if self.fraction > 0.9 {
+            Tone::Error
+        } else if self.fraction > 0.75 {
+            Tone::Warn
+        } else {
+            Tone::Ok
+        };
+        self
+    }
+}
+
+impl RenderOnce for Meter {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        v_flex()
+            .gap_1()
+            .when(self.label.is_some() || self.value_text.is_some(), |this| {
+                this.child(
+                    h_flex()
+                        .justify_between()
+                        .gap_2()
+                        .children(
+                            self.label
+                                .map(|label| Label::new(label).size(LabelSize::Small)),
+                        )
+                        .children(self.value_text.map(|value| {
+                            Label::new(value)
+                                .size(LabelSize::Small)
+                                .weight(FontWeight::MEDIUM)
+                        })),
+                )
+            })
+            .child(
+                div()
+                    .h(px(4.))
+                    .w_full()
+                    .rounded_full()
+                    .bg(cx.theme().colors().element_active)
+                    .child(
+                        div()
+                            .h_full()
+                            .rounded_full()
+                            .bg(self.tone.hsla(cx))
+                            .w(relative(self.fraction)),
+                    ),
+            )
+            .children(
+                self.caption
+                    .map(|text| Label::new(text).size(LabelSize::XSmall).color(Color::Muted)),
+            )
+    }
 }
 
 /// A selectable card: an icon, a title and a description. Used where a choice needs explaining,

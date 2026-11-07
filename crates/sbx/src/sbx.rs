@@ -239,7 +239,7 @@ pub struct ConfiguredResources {
 }
 
 /// What a sandbox looks like from the inside, collected with a single `exec`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SandboxProbe {
     pub cpus: Option<u32>,
     pub memory_total_bytes: Option<u64>,
@@ -254,7 +254,88 @@ pub struct SandboxProbe {
     pub agents: Vec<String>,
     /// Toolchains the project uses or that are installed, in [`Toolchain::ALL`] order.
     pub toolchains: Vec<ToolchainStatus>,
+    /// Usage of the agents that report it, newest data per agent.
+    pub agent_usage: Vec<AgentUsage>,
+    /// Whether Claude Code in the sandbox reports its status to Sands.
+    pub claude_status_hook: bool,
 }
+
+/// One usage limit of an agent subscription, such as the 5-hour or the weekly window.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UsageWindow {
+    pub label: String,
+    pub used_percent: f64,
+    /// Unix time in seconds when the window starts over.
+    pub resets_at: Option<i64>,
+}
+
+/// What an agent last reported about its limits, cost and context.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentUsage {
+    /// The `sbx` agent name: `claude` or `codex`.
+    pub agent: String,
+    pub plan: Option<String>,
+    pub model: Option<String>,
+    pub windows: Vec<UsageWindow>,
+    pub session_cost_usd: Option<f64>,
+    pub context_used_percent: Option<f64>,
+    pub session_tokens: Option<u64>,
+    /// Unix time in seconds of the report.
+    pub updated_at: Option<i64>,
+}
+
+/// Saves the JSON Claude Code passes to its status line, where the Sandbox panel reads it, then
+/// prints the user's own status line if there was one.
+const CLAUDE_STATUSLINE_SCRIPT: &str = r#"#!/bin/sh
+input=$(cat)
+status_dir="$HOME/.sands/agent-status"
+mkdir -p "$status_dir"
+printf '%s' "$input" > "$status_dir/claude.json.tmp" && mv "$status_dir/claude.json.tmp" "$status_dir/claude.json"
+if [ -s "$HOME/.sands/claude-statusline-original" ]; then
+  printf '%s' "$input" | sh -c "$(cat "$HOME/.sands/claude-statusline-original")"
+else
+  printf '%s' "$input" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+parts = [(data.get("model") or {}).get("display_name") or "Claude"]
+context = (data.get("context_window") or {}).get("used_percentage")
+if context is not None:
+    parts.append("%d%% context" % context)
+five_hour = ((data.get("rate_limits") or {}).get("five_hour") or {}).get("used_percentage")
+if five_hour is not None:
+    parts.append("5h %d%%" % five_hour)
+print(" · ".join(parts))
+' 2>/dev/null || echo Claude
+fi
+"#;
+
+/// Points Claude Code's status line at [`CLAUDE_STATUSLINE_SCRIPT`], keeping an existing status
+/// line command to chain to. Leaves a settings file that is not valid JSON alone.
+const CLAUDE_STATUS_HOOK_INSTALLER: &str = r#"set -e
+mkdir -p "$HOME/.sands" "$HOME/.claude"
+cat > "$HOME/.sands/claude-statusline.sh" <<'SANDS_STATUSLINE'
+SCRIPT
+SANDS_STATUSLINE
+chmod +x "$HOME/.sands/claude-statusline.sh"
+python3 - <<'SANDS_SETTINGS'
+import json, os
+path = os.path.expanduser("~/.claude/settings.json")
+ours = os.path.expanduser("~/.sands/claude-statusline.sh")
+try:
+    with open(path) as file:
+        settings = json.load(file)
+except FileNotFoundError:
+    settings = {}
+current = (settings.get("statusLine") or {}).get("command")
+if current and current != ours:
+    with open(os.path.expanduser("~/.sands/claude-statusline-original"), "w") as file:
+        file.write(current)
+settings["statusLine"] = {"type": "command", "command": ours}
+with open(path + ".sands-tmp", "w") as file:
+    json.dump(settings, file, indent=2)
+os.replace(path + ".sands-tmp", path)
+SANDS_SETTINGS
+"#;
 
 /// Language toolchains Sands sets up inside sandboxes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -428,6 +509,14 @@ command -v dart >/dev/null 2>&1 && echo "toolchain=flutter|$(dart --version 2>&1
 command -v rustc >/dev/null 2>&1 && echo "toolchain=rust|$(rustc --version 2>/dev/null | cut -d ' ' -f 2)"
 command -v dotnet >/dev/null 2>&1 && echo "toolchain=dotnet|$(dotnet --version 2>/dev/null)"
 command -v clangd >/dev/null 2>&1 && echo "toolchain=cpp|$(clangd --version 2>/dev/null | head -n 1 | grep -o '[0-9][0-9.]*' | head -n 1)"
+claude_status="$HOME/.sands/agent-status/claude.json"
+[ -s "$claude_status" ] && echo "agent_status=claude|$(stat -c %Y "$claude_status")|$(base64 -w0 < "$claude_status")"
+grep -qs 'sands/claude-statusline.sh' "$HOME/.claude/settings.json" && echo "claude_status_hook=1"
+codex_session=$(find "$HOME/.codex/sessions" -name '*.jsonl' -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d ' ' -f 2-)
+if [ -n "$codex_session" ]; then
+  codex_event=$(grep '"used_percent"' "$codex_session" | tail -n 1)
+  [ -n "$codex_event" ] && echo "agent_status=codex|$(stat -c %Y "$codex_session")|$(printf '%s' "$codex_event" | base64 -w0)"
+fi
 exit 0
 "#;
 
@@ -907,6 +996,22 @@ impl Sbx {
         Ok(parse_probe(&String::from_utf8_lossy(&output.stdout)))
     }
 
+    /// Makes Claude Code in the sandbox report its limits, cost and context through its status
+    /// line, so the Sandbox panel can show them. Safe to run again.
+    pub async fn install_claude_status_hook(&self, name: &str) -> Result<(), SbxError> {
+        let script =
+            CLAUDE_STATUS_HOOK_INSTALLER.replace("SCRIPT", CLAUDE_STATUSLINE_SCRIPT.trim_end());
+        let output = self.exec(name, &["bash", "-lc", script.as_str()]).await?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(classify_failure(
+                "install the Claude status line",
+                &output.stderr,
+            ))
+        }
+    }
+
     /// Installs toolchains inside the sandbox. This can take minutes (Flutter alone is close to
     /// a gigabyte), so callers should show progress.
     pub async fn install_toolchains(
@@ -1075,6 +1180,130 @@ fn repository_directory_name(url: &str) -> Option<String> {
     safe.then(|| name.to_string())
 }
 
+/// Parses `agent|<modified unix time>|<base64 JSON>` from the probe script.
+fn parse_agent_status(value: &str) -> Option<AgentUsage> {
+    use base64::Engine as _;
+
+    let mut parts = value.splitn(3, '|');
+    let agent = parts.next()?;
+    let modified = parts
+        .next()
+        .and_then(|time| time.trim().parse::<i64>().ok());
+    let json = base64::engine::general_purpose::STANDARD
+        .decode(parts.next()?.trim())
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&json).ok()?;
+    let mut usage = match agent {
+        "claude" => parse_claude_status(&json),
+        "codex" => parse_codex_event(&json),
+        _ => return None,
+    };
+    usage.updated_at = usage.updated_at.or(modified);
+    Some(usage)
+}
+
+/// The JSON Claude Code passes to its status line command.
+fn parse_claude_status(json: &serde_json::Value) -> AgentUsage {
+    let number = |pointer: &str| json.pointer(pointer).and_then(serde_json::Value::as_f64);
+    let window = |key: &str, label: &str| {
+        Some(UsageWindow {
+            label: label.to_string(),
+            used_percent: number(&format!("/rate_limits/{key}/used_percentage"))?,
+            resets_at: json
+                .pointer(&format!("/rate_limits/{key}/resets_at"))
+                .and_then(serde_json::Value::as_i64),
+        })
+    };
+    AgentUsage {
+        agent: "claude".to_string(),
+        plan: None,
+        model: json
+            .pointer("/model/display_name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        windows: [
+            window("five_hour", "5-hour limit"),
+            window("seven_day", "Weekly limit"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        session_cost_usd: number("/cost/total_cost_usd"),
+        context_used_percent: number("/context_window/used_percentage"),
+        session_tokens: None,
+        updated_at: None,
+    }
+}
+
+/// A `token_count` event from a Codex session log.
+fn parse_codex_event(json: &serde_json::Value) -> AgentUsage {
+    let limits = json.pointer("/payload/rate_limits");
+    let window = |key: &str| {
+        let window = limits?.get(key)?;
+        let minutes = window.get("window_minutes")?.as_u64()?;
+        Some(UsageWindow {
+            label: match minutes {
+                300 => "5-hour limit".to_string(),
+                10080 => "Weekly limit".to_string(),
+                minutes if minutes % 1440 == 0 => format!("{}-day limit", minutes / 1440),
+                minutes => format!("{}-hour limit", minutes / 60),
+            },
+            used_percent: window.get("used_percent")?.as_f64()?,
+            resets_at: window.get("resets_at").and_then(serde_json::Value::as_i64),
+        })
+    };
+    let info = json.pointer("/payload/info");
+    let context_window = info
+        .and_then(|info| info.get("model_context_window"))
+        .and_then(serde_json::Value::as_f64);
+    let last_input = info
+        .and_then(|info| info.pointer("/last_token_usage/input_tokens"))
+        .and_then(serde_json::Value::as_f64);
+    AgentUsage {
+        agent: "codex".to_string(),
+        plan: limits
+            .and_then(|limits| limits.get("plan_type"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        model: None,
+        windows: [window("primary"), window("secondary")]
+            .into_iter()
+            .flatten()
+            .collect(),
+        session_cost_usd: None,
+        context_used_percent: context_window
+            .zip(last_input)
+            .filter(|(window, _)| *window > 0.0)
+            .map(|(window, input)| (input / window * 100.0).min(100.0)),
+        session_tokens: info
+            .and_then(|info| info.pointer("/total_token_usage/total_tokens"))
+            .and_then(serde_json::Value::as_u64),
+        updated_at: json
+            .get("timestamp")
+            .and_then(serde_json::Value::as_str)
+            .and_then(parse_rfc3339_seconds),
+    }
+}
+
+/// Seconds since the Unix epoch of an RFC 3339 UTC timestamp such as `2026-11-05T13:06:25.653Z`.
+fn parse_rfc3339_seconds(timestamp: &str) -> Option<i64> {
+    let (date, time) = timestamp.trim_end_matches('Z').split_once('T')?;
+    let mut date = date.split('-').map(|part| part.parse::<i64>().ok());
+    let (year, month, day) = (date.next()??, date.next()??, date.next()??);
+    let mut time = time.split(':');
+    let hours = time.next()?.parse::<i64>().ok()?;
+    let minutes = time.next()?.parse::<i64>().ok()?;
+    let seconds = time.next()?.split('.').next()?.parse::<i64>().ok()?;
+    // Days from civil, Howard Hinnant's algorithm.
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146097 + day_of_era - 719468;
+    Some(days * 86400 + hours * 3600 + minutes * 60 + seconds)
+}
+
 fn parse_probe(output: &str) -> SandboxProbe {
     let mut probe = SandboxProbe::default();
     let mut used = std::collections::HashSet::new();
@@ -1117,6 +1346,15 @@ fn parse_probe(output: &str) -> SandboxProbe {
                 });
             }
             "agent" if !value.is_empty() => probe.agents.push(value.to_string()),
+            "claude_status_hook" => probe.claude_status_hook = value == "1",
+            "agent_status" => {
+                if let Some(usage) = parse_agent_status(value) {
+                    probe
+                        .agent_usage
+                        .retain(|existing| existing.agent != usage.agent);
+                    probe.agent_usage.push(usage);
+                }
+            }
             "marker" => {
                 if let Some(toolchain) = Toolchain::for_marker(value) {
                     used.insert(toolchain);
@@ -1380,7 +1618,13 @@ fn first_error_line(stderr: &[u8]) -> Option<String> {
     String::from_utf8_lossy(stderr)
         .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with('✓') && !line.starts_with("try:"))
+        .find(|line| {
+            !line.is_empty()
+                && !line.starts_with('✓')
+                && !line.starts_with("try:")
+                // `sbx` prints warnings, such as an expired sentinel session, before the error.
+                && !line.starts_with("WARN:")
+        })
         .map(|line| {
             line.trim_start_matches("error:")
                 .trim_start_matches("Error:")
@@ -1689,6 +1933,59 @@ mod tests {
     }
 
     #[test]
+    fn parses_agent_usage() {
+        use base64::Engine as _;
+
+        let encode = |json: &str| base64::engine::general_purpose::STANDARD.encode(json);
+        let claude = r#"{"model":{"display_name":"Opus"},"cost":{"total_cost_usd":1.25},
+            "context_window":{"used_percentage":23},
+            "rate_limits":{"five_hour":{"used_percentage":38.5,"resets_at":1793901132},
+            "seven_day":{"used_percentage":28,"resets_at":1794421046}}}"#;
+        let probe = parse_probe(&format!(
+            "agent_status=claude|1793900000|{}\nclaude_status_hook=1\n",
+            encode(claude)
+        ));
+        assert!(probe.claude_status_hook);
+        assert_eq!(probe.agent_usage.len(), 1);
+        let usage = &probe.agent_usage[0];
+        assert_eq!(usage.model.as_deref(), Some("Opus"));
+        assert_eq!(usage.session_cost_usd, Some(1.25));
+        assert_eq!(usage.updated_at, Some(1793900000));
+        assert_eq!(
+            usage.windows,
+            vec![
+                UsageWindow {
+                    label: "5-hour limit".to_string(),
+                    used_percent: 38.5,
+                    resets_at: Some(1793901132),
+                },
+                UsageWindow {
+                    label: "Weekly limit".to_string(),
+                    used_percent: 28.0,
+                    resets_at: Some(1794421046),
+                },
+            ]
+        );
+
+        let codex = r#"{"timestamp":"2026-11-05T13:06:25.653Z","type":"event_msg","payload":{
+            "type":"token_count","info":{"total_token_usage":{"total_tokens":5000},
+            "last_token_usage":{"input_tokens":64000},"model_context_window":256000},
+            "rate_limits":{"primary":{"used_percent":59.0,"window_minutes":300,"resets_at":1793901132},
+            "secondary":{"used_percent":41.0,"window_minutes":10080,"resets_at":1794421046},
+            "plan_type":"plus"}}}"#;
+        let probe = parse_probe(&format!("agent_status=codex|1|{}\n", encode(codex)));
+        let usage = &probe.agent_usage[0];
+        assert_eq!(usage.plan.as_deref(), Some("plus"));
+        assert_eq!(usage.windows[0].label, "5-hour limit");
+        assert_eq!(usage.windows[1].used_percent, 41.0);
+        assert_eq!(usage.context_used_percent, Some(25.0));
+        assert_eq!(usage.session_tokens, Some(5000));
+        assert_eq!(usage.updated_at, Some(1793883985));
+        assert_eq!(parse_rfc3339_seconds("1970-01-02T00:00:01Z"), Some(86401));
+        assert!(!parse_probe("").claude_status_hook);
+    }
+
+    #[test]
     fn parses_session_responses() -> TestResult {
         assert_eq!(parse_session_response(2, "1 0 YQ== \n")?, None);
         assert_eq!(
@@ -1709,6 +2006,54 @@ mod tests {
         );
         assert!(parse_session_response(2, "2 zero  \n").is_err());
         Ok(())
+    }
+
+    /// Installs the Claude status hook in the `sands-k8s-lab` sandbox, feeds the status line a
+    /// sample report and reads it back with the probe: `cargo test -p sbx -- --ignored`.
+    #[test]
+    #[ignore]
+    fn reports_claude_usage_from_a_real_sandbox() -> TestResult {
+        smol::block_on(async {
+            let sbx = Sbx::locate()?;
+            let name = "sands-k8s-lab";
+            sbx.install_claude_status_hook(name).await?;
+            sbx.install_claude_status_hook(name).await?;
+            let sample = r#"{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":12,"resets_at":1793901132}}}"#;
+            let output = sbx
+                .exec(
+                    name,
+                    &[
+                        "sh",
+                        "-c",
+                        &format!("printf '%s' '{sample}' | $HOME/.sands/claude-statusline.sh"),
+                    ],
+                )
+                .await?;
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                "Opus · 5h 12%"
+            );
+            let probe = sbx.probe(name).await?;
+            assert!(probe.claude_status_hook);
+            let usage = probe
+                .agent_usage
+                .iter()
+                .find(|usage| usage.agent == "claude")
+                .ok_or("no Claude usage")?;
+            assert_eq!(usage.windows[0].used_percent, 12.0);
+            assert!(usage.updated_at.is_some());
+            sbx.exec(
+                name,
+                &[
+                    "rm",
+                    "-rf",
+                    "/home/agent/.sands/agent-status",
+                    "/home/agent/.claude/settings.json",
+                ],
+            )
+            .await?;
+            Ok(())
+        })
     }
 
     /// Runs a shell session in a real sandbox: `cargo test -p sbx -- --ignored`.

@@ -3,17 +3,14 @@ use std::{future::Future, time::Duration};
 use chrono::{DateTime, Utc};
 use gpui::{
     Action, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable,
-    PathPromptOptions, Pixels, SharedString, Task, WeakEntity, actions, px,
+    FontWeight, PathPromptOptions, Pixels, SharedString, Task, WeakEntity, actions, px,
 };
 use kubernetes::{KubernetesOverview, PreparedConnection};
 use sbx::{
     ConfiguredResources, NetworkActivity, NetworkDecision, NetworkLog, PolicyRules, PublishedPort,
     SandboxInfo, SandboxProbe, SandboxStatus, Sbx, SbxError,
 };
-use ui::{
-    Chip, Divider, DividerColor, Indicator, ProgressBar, ToggleButtonGroup, ToggleButtonGroupStyle,
-    ToggleButtonSimple, Tooltip, prelude::*,
-};
+use ui::{Chip, Divider, DividerColor, Indicator, Tooltip, prelude::*};
 use ui_input::InputField;
 use util::ResultExt as _;
 use workspace::{
@@ -21,7 +18,11 @@ use workspace::{
     dock::{DockPosition, Panel, PanelEvent, PanelSizeState},
 };
 
-use crate::connected_sandbox;
+use crate::{
+    connected_sandbox,
+    design::{Meter, Tone, badge, caption, icon_button, key_value, section_header, status_dot},
+    new_project_modal::agent_icon,
+};
 
 actions!(
     sands,
@@ -353,22 +354,25 @@ impl SandboxPanel {
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (title, status) = match &self.state {
-            PanelState::Loaded(snapshot) => {
-                (snapshot.info.name.clone(), Some(snapshot.info.status))
-            }
-            _ => ("Sandbox".to_string(), None),
+        let (title, status, agent) = match &self.state {
+            PanelState::Loaded(snapshot) => (
+                snapshot.info.name.clone(),
+                Some(snapshot.info.status),
+                Some(snapshot.info.agent.clone()),
+            ),
+            _ => ("Sandbox".to_string(), None, None),
         };
-        let (status_label, status_color) = match status {
-            Some(SandboxStatus::Running) => ("Running", Color::Success),
-            Some(SandboxStatus::Stopped) => ("Stopped", Color::Muted),
-            Some(SandboxStatus::Unknown) => ("Unknown", Color::Warning),
-            None => ("", Color::Muted),
+        let (status_label, tone) = match status {
+            Some(SandboxStatus::Running) => ("Running", Tone::Ok),
+            Some(SandboxStatus::Stopped) => ("Stopped", Tone::Muted),
+            Some(SandboxStatus::Unknown) => ("Unknown", Tone::Warn),
+            None => ("", Tone::Muted),
         };
 
         h_flex()
-            .px_3()
-            .py_2()
+            .h(px(36.))
+            .pl_3()
+            .pr_1p5()
             .gap_2()
             .justify_between()
             .border_b_1()
@@ -377,43 +381,46 @@ impl SandboxPanel {
                 h_flex()
                     .gap_2()
                     .min_w_0()
-                    .child(Icon::new(IconName::Server).color(Color::Muted))
-                    .child(Label::new(title).truncate())
-                    .when(status.is_some(), |this| {
+                    .when(status.is_some(), |this| this.child(status_dot(tone, cx)))
+                    .child(
+                        Label::new(title)
+                            .size(LabelSize::Small)
+                            .weight(FontWeight::SEMIBOLD)
+                            .truncate(),
+                    )
+                    .when(status.is_some(), |this| this.child(caption(status_label)))
+                    .when_some(agent, |this, agent| {
                         this.child(
                             h_flex()
                                 .gap_1()
-                                .child(Indicator::dot().color(status_color))
                                 .child(
-                                    Label::new(status_label)
-                                        .size(LabelSize::Small)
+                                    Icon::new(agent_icon(&agent))
+                                        .size(IconSize::XSmall)
                                         .color(Color::Muted),
-                                ),
+                                )
+                                .child(caption(crate::agent_display_name(&agent).to_string())),
                         )
                     }),
             )
             .child(
                 h_flex()
-                    .gap_1()
+                    .gap_0p5()
                     .when(status == Some(SandboxStatus::Running), |this| {
                         this.child(
-                            IconButton::new("stop-sandbox", IconName::Stop)
-                                .icon_size(IconSize::Small)
-                                .tooltip(Tooltip::text("Stop sandbox"))
-                                .on_click(cx.listener(|this, _, window, cx| {
+                            icon_button("stop-sandbox", IconName::Stop, "Stop sandbox").on_click(
+                                cx.listener(|this, _, window, cx| {
                                     this.run_sbx_action(
                                         |sbx, name| async move { sbx.stop(&name).await },
                                         window,
                                         cx,
                                     )
-                                })),
+                                }),
+                            ),
                         )
                     })
                     .when(status == Some(SandboxStatus::Stopped), |this| {
                         this.child(
-                            IconButton::new("start-sandbox", IconName::PlayFilled)
-                                .icon_size(IconSize::Small)
-                                .tooltip(Tooltip::text("Start sandbox"))
+                            icon_button("start-sandbox", IconName::PlayFilled, "Start sandbox")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.run_sbx_action(
                                         |sbx, name| async move { sbx.start(&name).await },
@@ -424,66 +431,50 @@ impl SandboxPanel {
                         )
                     })
                     .child(
-                        IconButton::new("refresh-sandbox", IconName::RotateCw)
-                            .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Refresh"))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.schedule_refresh(window, cx)
-                                }),
-                            ),
+                        icon_button("refresh-sandbox", IconName::RotateCw, "Refresh").on_click(
+                            cx.listener(|this, _, window, cx| this.schedule_refresh(window, cx)),
+                        ),
                     ),
             )
     }
 
     fn render_navigation(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = cx.theme().colors();
+        let tabs = [
+            (PanelPage::Overview, "Overview"),
+            (PanelPage::Kubernetes, "Kubernetes"),
+            (PanelPage::Traffic, "Network"),
+            (PanelPage::Settings, "Settings"),
+        ];
         h_flex()
+            .h(px(32.))
             .px_3()
-            .py_2()
+            .gap_4()
             .border_b_1()
-            .border_color(cx.theme().colors().border_variant)
-            .child(
-                ToggleButtonGroup::single_row(
-                    "sandbox-page",
-                    [
-                        ToggleButtonSimple::new(
-                            "Overview",
-                            cx.listener(|this, _, _, cx| {
-                                this.page = PanelPage::Overview;
-                                cx.notify();
-                            }),
-                        ),
-                        ToggleButtonSimple::new(
-                            "Kubernetes",
-                            cx.listener(|this, _, _, cx| {
-                                this.page = PanelPage::Kubernetes;
-                                cx.notify();
-                            }),
-                        ),
-                        ToggleButtonSimple::new(
-                            "Traffic",
-                            cx.listener(|this, _, _, cx| {
-                                this.page = PanelPage::Traffic;
-                                cx.notify();
-                            }),
-                        ),
-                        ToggleButtonSimple::new(
-                            "Settings",
-                            cx.listener(|this, _, _, cx| {
-                                this.page = PanelPage::Settings;
-                                cx.notify();
-                            }),
-                        ),
-                    ],
-                )
-                .style(ToggleButtonGroupStyle::Outlined)
-                .selected_index(match self.page {
-                    PanelPage::Overview => 0,
-                    PanelPage::Kubernetes => 1,
-                    PanelPage::Traffic => 2,
-                    PanelPage::Settings => 3,
-                }),
-            )
+            .border_color(colors.border_variant)
+            .children(tabs.into_iter().map(|(page, title)| {
+                let selected = self.page == page;
+                v_flex()
+                    .id(title)
+                    .h_full()
+                    .justify_center()
+                    .cursor_pointer()
+                    .border_b_2()
+                    .border_color(if selected {
+                        colors.border_focused
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .child(Label::new(title).size(LabelSize::Small).color(if selected {
+                        Color::Default
+                    } else {
+                        Color::Muted
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.page = page;
+                        cx.notify();
+                    }))
+            }))
     }
 
     fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -530,27 +521,25 @@ impl SandboxPanel {
     fn render_overview(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
         let toolchains = self.render_toolchains(snapshot, cx);
         v_flex()
-            .p_3()
-            .gap_4()
+            .child(section(
+                "Agent",
+                IconName::Sparkle,
+                render_agent(snapshot, cx),
+                cx,
+            ))
             .child(section(
                 "Resources",
                 IconName::Box,
                 render_resources(snapshot, cx),
                 cx,
             ))
-            .child(section("Toolchains", IconName::ToolHammer, toolchains, cx))
             .child(section(
                 "Repositories",
                 IconName::GitBranch,
                 render_repositories(snapshot, cx),
                 cx,
             ))
-            .child(section(
-                "Agents",
-                IconName::Sparkle,
-                render_agents(snapshot),
-                cx,
-            ))
+            .child(section("Toolchains", IconName::ToolHammer, toolchains, cx))
             .into_any_element()
     }
 
@@ -1051,6 +1040,21 @@ async fn load_snapshot(name: String) -> anyhow::Result<Snapshot> {
             }
         },
     );
+    let mut probe = probe?;
+    if let Some(found) = &probe
+        && !found.claude_status_hook
+        && (info.agent == "claude" || found.agents.iter().any(|agent| agent == "claude"))
+    {
+        // The status line reports Claude's limits; it only exists once Sands installs it.
+        if sbx
+            .install_claude_status_hook(&name)
+            .await
+            .log_err()
+            .is_some()
+        {
+            probe = sbx.probe(&name).await.log_err().or(probe);
+        }
+    }
     let kubernetes = match kubernetes {
         Ok(Some(overview)) => KubernetesState::Connected(overview),
         Ok(None) => KubernetesState::NotConnected,
@@ -1059,7 +1063,7 @@ async fn load_snapshot(name: String) -> anyhow::Result<Snapshot> {
     Ok(Snapshot {
         info,
         configured,
-        probe: probe?,
+        probe,
         ports: ports?,
         network: network.log_err().unwrap_or_default(),
         rules: rules.log_err().unwrap_or_default(),
@@ -1115,57 +1119,227 @@ fn stat_tile(label: &'static str, value: String, cx: &App) -> impl IntoElement {
         )
 }
 
-fn render_resources(snapshot: &Snapshot, cx: &App) -> impl IntoElement {
+fn render_resources(snapshot: &Snapshot, _cx: &App) -> impl IntoElement {
     let configured = snapshot.configured.clone().unwrap_or_default();
     let Some(probe) = &snapshot.probe else {
         return v_flex().child(muted("Start the sandbox to see its resources."));
     };
-
-    let cpu_limit = match configured.cpus {
-        Some(cpus) => format!("limit {cpus}"),
-        None => "all host CPUs".to_string(),
+    let cpus = probe.cpus.unwrap_or(1).max(1);
+    let load = probe
+        .load_average
+        .as_deref()
+        .and_then(|load| load.split_whitespace().next())
+        .and_then(|load| load.parse::<f32>().ok())
+        .unwrap_or_default();
+    let memory = probe
+        .memory_total_bytes
+        .zip(probe.memory_available_bytes)
+        .map(|(total, available)| (total.saturating_sub(available), total));
+    let disk = probe.disk_used_bytes.zip(probe.disk_total_bytes);
+    let share = |usage: Option<(u64, u64)>| {
+        usage
+            .map(|(used, total)| used as f32 / total.max(1) as f32)
+            .unwrap_or_default()
     };
-    let memory_limit = configured
-        .memory
-        .map(|memory| format!("limit {memory}"))
-        .unwrap_or_else(|| "half of host memory".to_string());
-
+    let amounts = |usage: Option<(u64, u64)>| {
+        usage
+            .map(|(used, total)| format!("{} / {}", format_bytes(used), format_bytes(total)))
+            .unwrap_or_else(|| "—".to_string())
+    };
     v_flex()
+        .gap_3()
+        .child(
+            Meter::new(load / cpus as f32)
+                .label("CPU")
+                .value_text(format!("load {load:.2} on {cpus} cores"))
+                .caption(match configured.cpus {
+                    Some(limit) => format!("limited to {limit} cores"),
+                    None => "all host cores".to_string(),
+                })
+                .usage_tone(),
+        )
+        .child(
+            Meter::new(share(memory))
+                .label("Memory")
+                .value_text(amounts(memory))
+                .caption(
+                    configured
+                        .memory
+                        .map(|memory| format!("limited to {memory}"))
+                        .unwrap_or_else(|| "half of host memory".to_string()),
+                )
+                .usage_tone(),
+        )
+        .child(
+            Meter::new(share(disk))
+                .label("Disk")
+                .value_text(amounts(disk))
+                .usage_tone(),
+        )
+}
+
+/// Limits, cost and context of the project's agent, from what the agent last reported.
+fn render_agent(snapshot: &Snapshot, cx: &App) -> impl IntoElement {
+    let agent = snapshot.info.agent.as_str();
+    let probe = snapshot.probe.as_ref();
+    let usage = probe.and_then(|probe| {
+        probe
+            .agent_usage
+            .iter()
+            .find(|usage| usage.agent == agent)
+            .or_else(|| probe.agent_usage.first())
+    });
+    let header = h_flex()
         .gap_2()
         .child(
-            row()
-                .child(Label::new(format!(
-                    "{} CPUs",
-                    probe
-                        .cpus
-                        .map(|cpus| cpus.to_string())
-                        .unwrap_or_else(|| "?".to_string())
-                )))
-                .child(muted(format!(
-                    "{cpu_limit} · load {}",
-                    probe.load_average.clone().unwrap_or_default()
-                ))),
+            Icon::new(agent_icon(
+                usage.map(|usage| usage.agent.as_str()).unwrap_or(agent),
+            ))
+            .size(IconSize::Small)
+            .color(Color::Muted),
         )
-        .child(usage_bar(
-            "memory",
-            "Memory",
-            probe
-                .memory_total_bytes
-                .zip(probe.memory_available_bytes)
-                .map(|(total, available)| (total.saturating_sub(available), total)),
-            memory_limit,
-            cx,
-        ))
-        .child(usage_bar(
-            "disk",
-            "Disk",
-            probe.disk_used_bytes.zip(probe.disk_total_bytes),
-            configured
-                .docker_disk
-                .map(|size| format!("Docker {size}"))
-                .unwrap_or_default(),
-            cx,
-        ))
+        .child(
+            Label::new(
+                crate::agent_display_name(usage.map(|usage| usage.agent.as_str()).unwrap_or(agent))
+                    .to_string(),
+            )
+            .size(LabelSize::Small)
+            .weight(FontWeight::MEDIUM),
+        )
+        .children(
+            usage
+                .and_then(|usage| usage.plan.clone())
+                .map(|plan| badge(plan, Tone::Info, cx)),
+        )
+        .children(usage.and_then(|usage| usage.model.clone()).map(caption));
+
+    let model_requests = snapshot
+        .network
+        .allowed
+        .iter()
+        .filter(|activity| is_model_api(&activity.host))
+        .collect::<Vec<_>>();
+    let requests_row = (!model_requests.is_empty()).then(|| {
+        let count = model_requests
+            .iter()
+            .map(|activity| activity.count)
+            .sum::<u64>();
+        let last = model_requests
+            .iter()
+            .filter_map(|activity| activity.last_seen.as_deref())
+            .max()
+            .map(relative_time)
+            .unwrap_or_default();
+        key_value(
+            "Model requests",
+            Label::new(format!("{count} · last {last}")).size(LabelSize::Small),
+        )
+    });
+
+    let Some(usage) = usage else {
+        let hint = if agent == "shell" {
+            "This project has no coding agent. Choose one when you create a project."
+        } else if probe.is_none() {
+            "Start the sandbox to see the agent's limits."
+        } else {
+            "Limits appear after the agent's first reply. Claude reports them only on Pro and \
+             Max plans."
+        };
+        return v_flex()
+            .gap_2()
+            .child(header)
+            .child(muted(hint))
+            .children(requests_row);
+    };
+
+    let now = Utc::now().timestamp();
+    v_flex()
+        .gap_3()
+        .child(header)
+        .when(usage.windows.is_empty(), |this| {
+            this.child(muted("The agent has not reported subscription limits."))
+        })
+        .children(usage.windows.iter().map(|window| {
+            let resets = window
+                .resets_at
+                .filter(|resets_at| *resets_at > now)
+                .map(|resets_at| format!("resets in {}", format_reset(resets_at, now)))
+                .unwrap_or_else(|| "reset time unknown".to_string());
+            Meter::new((window.used_percent / 100.0) as f32)
+                .label(window.label.clone())
+                .value_text(format!("{:.0}%", window.used_percent))
+                .caption(resets)
+                .usage_tone()
+        }))
+        .child(
+            v_flex()
+                .when_some(usage.session_cost_usd, |this, cost| {
+                    this.child(key_value(
+                        "Session cost",
+                        Label::new(format!("${cost:.2}")).size(LabelSize::Small),
+                    ))
+                })
+                .when_some(usage.context_used_percent, |this, context| {
+                    this.child(key_value(
+                        "Context used",
+                        Label::new(format!("{context:.0}%")).size(LabelSize::Small),
+                    ))
+                })
+                .when_some(usage.session_tokens, |this, tokens| {
+                    this.child(key_value(
+                        "Session tokens",
+                        Label::new(format_count(tokens)).size(LabelSize::Small),
+                    ))
+                })
+                .children(requests_row),
+        )
+        .children(usage.updated_at.map(|updated| {
+            caption(format!(
+                "Reported {}",
+                relative_seconds((now - updated).max(0))
+            ))
+        }))
+}
+
+/// "2h 14m", or "3d 4h" for windows a few days away.
+fn format_reset(resets_at: i64, now: i64) -> String {
+    let minutes = (resets_at - now).max(0) / 60;
+    let (days, hours, minutes) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    let local = chrono::DateTime::from_timestamp(resets_at, 0)
+        .map(|time| time.with_timezone(&chrono::Local));
+    let at = local
+        .map(|time| {
+            if days == 0 {
+                time.format(" · %H:%M").to_string()
+            } else {
+                time.format(" · %a %H:%M").to_string()
+            }
+        })
+        .unwrap_or_default();
+    if days > 0 {
+        format!("{days}d {hours}h{at}")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m{at}")
+    } else {
+        format!("{minutes}m{at}")
+    }
+}
+
+fn format_count(count: u64) -> String {
+    match count {
+        0..1_000 => count.to_string(),
+        1_000..1_000_000 => format!("{:.1}K", count as f64 / 1_000.0),
+        _ => format!("{:.1}M", count as f64 / 1_000_000.0),
+    }
+}
+
+fn relative_seconds(seconds: i64) -> String {
+    match seconds {
+        0..60 => "just now".to_string(),
+        60..3600 => format!("{}m ago", seconds / 60),
+        3600..86400 => format!("{}h ago", seconds / 3600),
+        _ => format!("{}d ago", seconds / 86400),
+    }
 }
 
 fn render_resource_settings(snapshot: &Snapshot) -> impl IntoElement {
@@ -1226,28 +1400,6 @@ fn render_published_ports(snapshot: &Snapshot) -> impl IntoElement {
         }))
 }
 
-fn usage_bar(
-    id: &'static str,
-    title: &'static str,
-    usage: Option<(u64, u64)>,
-    note: String,
-    cx: &App,
-) -> impl IntoElement {
-    let (used, total) = usage.unwrap_or((0, 0));
-    v_flex()
-        .gap_1()
-        .child(
-            row()
-                .child(Label::new(format!(
-                    "{title}  {} of {}",
-                    format_bytes(used),
-                    format_bytes(total)
-                )))
-                .child(muted(note)),
-        )
-        .child(ProgressBar::new(id, used as f32, total.max(1) as f32, cx))
-}
-
 fn render_repositories(snapshot: &Snapshot, cx: &App) -> impl IntoElement {
     let repositories = snapshot
         .probe
@@ -1266,80 +1418,47 @@ fn render_repositories(snapshot: &Snapshot, cx: &App) -> impl IntoElement {
                 .next()
                 .unwrap_or(repository.path.as_str())
                 .to_string();
-            v_flex()
-                .p_2()
-                .gap_1()
-                .rounded_md()
-                .border_1()
-                .border_l_2()
-                .border_color(cx.theme().colors().border_focused)
-                .bg(cx.theme().colors().editor_background)
+            h_flex()
+                .gap_2()
+                .items_start()
                 .child(
-                    h_flex()
-                        .justify_between()
-                        .gap_2()
+                    div().pt_0p5().child(
+                        Icon::new(IconName::GitBranch)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    ),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
                         .child(
                             h_flex()
-                                .min_w_0()
                                 .gap_2()
+                                .justify_between()
                                 .child(
-                                    Icon::new(IconName::GitBranch)
-                                        .size(IconSize::Small)
-                                        .color(Color::Accent),
+                                    Label::new(name)
+                                        .size(LabelSize::Small)
+                                        .weight(FontWeight::MEDIUM)
+                                        .truncate(),
                                 )
-                                .child(Label::new(name).truncate()),
+                                .when_some(repository.branch, |this, branch| {
+                                    this.child(
+                                        Label::new(branch)
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Accent)
+                                            .buffer_font(cx),
+                                    )
+                                }),
                         )
-                        .when_some(repository.branch, |this, branch| {
-                            this.child(Chip::new(branch).label_color(Color::Accent))
-                        }),
+                        .child(
+                            Label::new(repository.remote.unwrap_or(repository.path))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        ),
                 )
-                .child(muted(repository.path))
-                .when_some(repository.remote, |this, remote| {
-                    this.child(
-                        Label::new(remote)
-                            .size(LabelSize::Small)
-                            .color(Color::Muted)
-                            .truncate(),
-                    )
-                })
         }))
-}
-
-fn render_agents(snapshot: &Snapshot) -> impl IntoElement {
-    let agents = snapshot
-        .probe
-        .as_ref()
-        .map(|probe| probe.agents.clone())
-        .unwrap_or_default();
-    let mut requests = snapshot
-        .network
-        .allowed
-        .iter()
-        .filter(|activity| is_model_api(&activity.host))
-        .cloned()
-        .collect::<Vec<_>>();
-    requests.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
-
-    v_flex()
-        .gap_2()
-        .child(
-            h_flex()
-                .gap_1()
-                .flex_wrap()
-                .when(agents.is_empty(), |this| {
-                    this.child(muted("No agent CLIs installed in the sandbox."))
-                })
-                .children(agents.into_iter().map(Chip::new)),
-        )
-        .child(
-            Label::new("Recent model requests")
-                .size(LabelSize::Small)
-                .color(Color::Muted),
-        )
-        .when(requests.is_empty(), |this| {
-            this.child(muted("No requests to model APIs yet."))
-        })
-        .children(requests.into_iter().map(activity_row))
 }
 
 fn render_network(snapshot: &Snapshot) -> impl IntoElement {
@@ -1398,29 +1517,22 @@ fn activity_row(activity: NetworkActivity) -> impl IntoElement {
         )))
 }
 
+/// A titled group of the panel, separated from the next one by a hairline.
 fn section(
     title: &'static str,
-    icon: IconName,
+    _icon: IconName,
     content: impl IntoElement,
     cx: &App,
 ) -> impl IntoElement {
     v_flex()
+        .px_3()
+        .pt_2()
+        .pb_3()
         .gap_1p5()
-        .child(
-            h_flex()
-                .gap_1p5()
-                .child(Icon::new(icon).size(IconSize::Small).color(Color::Muted))
-                .child(Label::new(title).size(LabelSize::Small).color(Color::Muted)),
-        )
-        .child(
-            v_flex()
-                .p_2()
-                .rounded_md()
-                .border_1()
-                .border_color(cx.theme().colors().border_variant)
-                .bg(cx.theme().colors().element_background)
-                .child(content),
-        )
+        .border_b_1()
+        .border_color(cx.theme().colors().border_variant)
+        .child(section_header(title, None))
+        .child(content)
 }
 
 fn row() -> gpui::Div {
@@ -1573,6 +1685,17 @@ impl Panel for SandboxPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_limit_resets() {
+        let now = 1_793_880_000;
+        assert!(format_reset(now + 2 * 3600 + 14 * 60, now).starts_with("2h 14m · "));
+        assert!(format_reset(now + 3 * 86400 + 4 * 3600, now).starts_with("3d 4h · "));
+        assert!(format_reset(now + 90, now).starts_with("1m · "));
+        assert_eq!(format_count(950), "950");
+        assert_eq!(format_count(12_345), "12.3K");
+        assert_eq!(relative_seconds(7200), "2h ago");
+    }
 
     #[test]
     fn parses_port_mappings() {
