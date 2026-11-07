@@ -1,6 +1,6 @@
 use gpui::{
     Action, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, Pixels, SharedString, Task, WeakEntity, actions, px,
+    FontWeight, Pixels, SharedString, Subscription, Task, WeakEntity, actions, px,
 };
 use sbx::{SandboxInfo, SandboxStatus};
 use ui::prelude::*;
@@ -16,6 +16,7 @@ use crate::{
     list_sandboxes,
     new_project_modal::{NewProjectModal, agent_icon},
     open_sandbox,
+    sbx_problem::{Problem, ProblemFixed, SbxProblemView, problem_view},
 };
 
 actions!(
@@ -55,6 +56,8 @@ enum ProjectList {
     Loading,
     Loaded(Vec<SandboxInfo>),
     Failed(SharedString),
+    /// A problem a button fixes, such as a stopped daemon or a missing sign-in.
+    Problem(Entity<SbxProblemView>),
 }
 
 /// Lists Sands projects. Each project is a Docker Sandbox, so the list comes from `sbx ls`.
@@ -66,6 +69,7 @@ pub struct ProjectsPanel {
     /// The project being opened: switching takes a while, so its row says so.
     opening: Option<String>,
     _refresh: Task<()>,
+    _problem_subscription: Option<Subscription>,
 }
 
 impl ProjectsPanel {
@@ -83,6 +87,7 @@ impl ProjectsPanel {
                     projects: ProjectList::Loading,
                     opening: None,
                     _refresh: Task::ready(()),
+                    _problem_subscription: None,
                 };
                 panel.refresh(window, cx);
                 panel
@@ -93,10 +98,21 @@ impl ProjectsPanel {
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self._refresh = cx.spawn_in(window, async move |this, cx| {
             let result = cx.background_spawn(list_sandboxes()).await;
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 this.projects = match result {
                     Ok(sandboxes) => ProjectList::Loaded(sandboxes),
-                    Err(error) => ProjectList::Failed(error.to_string().into()),
+                    Err(error) => match Problem::of(&error) {
+                        Some(problem) => {
+                            let view = problem_view(problem, cx);
+                            this._problem_subscription = Some(cx.subscribe_in(
+                                &view,
+                                window,
+                                |this, _, _: &ProblemFixed, window, cx| this.refresh(window, cx),
+                            ));
+                            ProjectList::Problem(view)
+                        }
+                        None => ProjectList::Failed(error.to_string().into()),
+                    },
                 };
                 cx.notify();
             })
@@ -150,6 +166,7 @@ impl ProjectsPanel {
             ProjectList::Loading => {
                 return v_flex().p_3().child(caption("Loading projects…"));
             }
+            ProjectList::Problem(view) => return v_flex().child(view.clone()),
             ProjectList::Failed(message) => {
                 return v_flex().p_3().child(
                     Label::new(message.clone())

@@ -3,8 +3,8 @@ use std::{path::PathBuf, sync::Arc};
 use collections::HashSet;
 use fuzzy_nucleo::{StringMatch, StringMatchCandidate};
 use gpui::{
-    App, AppContext as _, DismissEvent, Entity, EventEmitter, Focusable, PromptLevel, SharedString,
-    Subscription, Task, actions,
+    Action as _, App, AppContext as _, DismissEvent, Entity, EventEmitter, Focusable, PromptLevel,
+    SharedString, Subscription, Task, actions,
 };
 use picker::{Picker, PickerDelegate};
 use project::{
@@ -30,6 +30,7 @@ mod kubernetes_view;
 mod new_project_modal;
 mod projects_panel;
 mod sandbox_panel;
+mod sbx_problem;
 
 pub use kubernetes_view::KubernetesView;
 pub use projects_panel::ProjectsPanel;
@@ -107,6 +108,14 @@ pub(crate) fn open_sandbox(
         .spawn(cx, async move |cx| {
             let sbx = Sbx::locate()?;
             let report = sbx.diagnose().await?;
+            if let Err(error) = report.ensure_ready() {
+                // The Projects panel offers the fix (start the daemon, sign in) once it reloads;
+                // without this the SSH connection would only time out.
+                cx.update(|window, cx| {
+                    window.dispatch_action(projects_panel::RefreshProjects.boxed_clone(), cx)
+                })?;
+                return Err(error.into());
+            }
             if !report.ssh_configured() {
                 let answer = cx
                     .update(|window, cx| {

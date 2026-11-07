@@ -6943,7 +6943,7 @@ impl ProjectGroupKey {
         // A Sands project is a sandbox whose code usually lives in a folder named after the
         // sandbox image (`workspace`), so the sandbox name is what tells projects apart.
         let nickname = match &self.host {
-            Some(RemoteConnectionOptions::Ssh(options)) => options.nickname.clone(),
+            Some(host @ RemoteConnectionOptions::Ssh(_)) => Some(host.display_name()),
             _ => None,
         };
         match nickname {

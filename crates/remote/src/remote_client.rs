@@ -1399,10 +1399,14 @@ impl RemoteConnectionOptions {
 
     pub fn display_name(&self) -> String {
         match self {
-            RemoteConnectionOptions::Ssh(opts) => opts
-                .nickname
-                .clone()
-                .unwrap_or_else(|| opts.host.to_string()),
+            RemoteConnectionOptions::Ssh(opts) => opts.nickname.clone().unwrap_or_else(|| {
+                // Sands opens sandboxes through `<name>.sbx`; restored sessions lose the
+                // nickname, and the sandbox name is what users know.
+                let host = opts.host.to_string();
+                host.strip_suffix(".sbx")
+                    .map(str::to_string)
+                    .unwrap_or(host)
+            }),
             RemoteConnectionOptions::Wsl(opts) => opts.distro_name.clone(),
             RemoteConnectionOptions::Docker(opts) => {
                 if opts.use_podman {

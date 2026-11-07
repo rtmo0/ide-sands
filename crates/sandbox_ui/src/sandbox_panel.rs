@@ -3,14 +3,15 @@ use std::{future::Future, time::Duration};
 use chrono::{DateTime, Utc};
 use gpui::{
     Action, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, PathPromptOptions, Pixels, SharedString, Task, WeakEntity, actions, px,
+    FontWeight, PathPromptOptions, Pixels, SharedString, Subscription, Task, WeakEntity, actions,
+    px,
 };
 use kubernetes::{KubernetesOverview, PreparedConnection};
 use sbx::{
     ConfiguredResources, NetworkActivity, NetworkDecision, NetworkLog, PolicyRules, PublishedPort,
     SandboxInfo, SandboxProbe, SandboxStatus, Sbx, SbxError,
 };
-use ui::{Chip, Divider, DividerColor, Indicator, Tooltip, prelude::*};
+use ui::{Divider, DividerColor, Indicator, Tooltip, prelude::*};
 use ui_input::InputField;
 use util::ResultExt as _;
 use workspace::{
@@ -20,8 +21,12 @@ use workspace::{
 
 use crate::{
     connected_sandbox,
-    design::{Meter, Tone, badge, caption, icon_button, key_value, section_header, status_dot},
+    design::{
+        Meter, Tone, badge, caption, icon_button, key_value, primary_button, section_header,
+        status_dot,
+    },
     new_project_modal::agent_icon,
+    sbx_problem::{Problem, ProblemFixed, SbxProblemView, problem_view},
 };
 
 actions!(
@@ -79,6 +84,7 @@ enum PanelState {
     Loading,
     Loaded(Box<Snapshot>),
     Failed(SharedString),
+    Problem(Entity<SbxProblemView>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +112,7 @@ pub struct SandboxPanel {
     connecting_kubernetes: bool,
     _refresh: Task<()>,
     _action: Task<()>,
+    _problem_subscription: Option<Subscription>,
 }
 
 impl SandboxPanel {
@@ -140,6 +147,7 @@ impl SandboxPanel {
                     connecting_kubernetes: false,
                     _refresh: Task::ready(()),
                     _action: Task::ready(()),
+                    _problem_subscription: None,
                 };
                 panel.schedule_refresh(window, cx);
                 panel
@@ -155,7 +163,10 @@ impl SandboxPanel {
     fn snapshot_name(&self) -> Option<String> {
         match &self.state {
             PanelState::Loaded(snapshot) => Some(snapshot.info.name.clone()),
-            PanelState::NoSandbox | PanelState::Loading | PanelState::Failed(_) => None,
+            PanelState::NoSandbox
+            | PanelState::Loading
+            | PanelState::Failed(_)
+            | PanelState::Problem(_) => None,
         }
     }
 
@@ -171,15 +182,19 @@ impl SandboxPanel {
                 };
                 if first || visible {
                     first = false;
-                    let state = match name {
-                        None => PanelState::NoSandbox,
-                        Some(name) => match cx.background_spawn(load_snapshot(name)).await {
-                            Ok(snapshot) => PanelState::Loaded(Box::new(snapshot)),
-                            Err(error) => PanelState::Failed(format!("{error:#}").into()),
-                        },
+                    let result = match name {
+                        None => None,
+                        Some(name) => Some(cx.background_spawn(load_snapshot(name)).await),
                     };
-                    let updated = this.update(cx, |this, cx| {
-                        this.state = state;
+                    let updated = this.update_in(cx, |this, window, cx| {
+                        this.state = match result {
+                            None => PanelState::NoSandbox,
+                            Some(Ok(snapshot)) => PanelState::Loaded(Box::new(snapshot)),
+                            Some(Err(error)) => match Problem::of_any(&error) {
+                                Some(problem) => this.problem_state(problem, window, cx),
+                                None => PanelState::Failed(format!("{error:#}").into()),
+                            },
+                        };
                         cx.notify();
                     });
                     if updated.is_err() {
@@ -189,6 +204,28 @@ impl SandboxPanel {
                 cx.background_executor().timer(REFRESH_INTERVAL).await;
             }
         });
+    }
+
+    /// Keeps the current problem view while the problem lasts, so a sign-in in progress
+    /// survives the periodic refresh.
+    fn problem_state(
+        &mut self,
+        problem: Problem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> PanelState {
+        if let PanelState::Problem(view) = &self.state
+            && view.read(cx).problem() == &problem
+        {
+            return PanelState::Problem(view.clone());
+        }
+        let view = problem_view(problem, cx);
+        self._problem_subscription = Some(cx.subscribe_in(
+            &view,
+            window,
+            |this, _, _: &ProblemFixed, window, cx| this.schedule_refresh(window, cx),
+        ));
+        PanelState::Problem(view)
     }
 
     fn run_sbx_action<F>(
@@ -484,6 +521,7 @@ impl SandboxPanel {
                     .into_any_element();
             }
             PanelState::Loading => return message("Loading sandbox…").into_any_element(),
+            PanelState::Problem(view) => return view.clone().into_any_element(),
             PanelState::Failed(error) => {
                 return v_flex()
                     .p_3()
@@ -557,18 +595,20 @@ impl SandboxPanel {
             .map(|activity| activity.count)
             .sum::<u64>();
         v_flex()
-            .p_3()
-            .gap_4()
             .child(
                 h_flex()
-                    .gap_2()
-                    .child(metric_card("Allowed", allowed, Color::Success, cx))
-                    .child(metric_card("Blocked", blocked, Color::Error, cx)),
+                    .px_3()
+                    .py_3()
+                    .gap_4()
+                    .border_b_1()
+                    .border_color(cx.theme().colors().border_variant)
+                    .child(metric_card("Allowed requests", allowed, Color::Success, cx))
+                    .child(metric_card("Blocked requests", blocked, Color::Error, cx)),
             )
             .child(section(
                 "Network traffic",
                 IconName::Public,
-                render_network(snapshot),
+                render_network(snapshot, cx),
                 cx,
             ))
             .child(section(
@@ -770,29 +810,48 @@ impl SandboxPanel {
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(Indicator::dot().color(if status.version.is_some() {
-                                Color::Success
-                            } else {
-                                Color::Error
-                            }))
-                            .child(Label::new(status.toolchain.display_name()))
-                            .when(!status.used_by_project, |this| {
-                                this.child(muted("not used by the project"))
-                            }),
+                            .child(status_dot(
+                                match (&status.version, status.used_by_project) {
+                                    (None, _) => Tone::Error,
+                                    (Some(_), true) => Tone::Ok,
+                                    (Some(_), false) => Tone::Muted,
+                                },
+                                cx,
+                            ))
+                            .child(
+                                Label::new(status.toolchain.display_name())
+                                    .size(LabelSize::Small)
+                                    .color(if status.used_by_project {
+                                        Color::Default
+                                    } else {
+                                        Color::Muted
+                                    }),
+                            ),
                     )
-                    .child(version)
+                    .child(version.buffer_font(cx))
             }))
             .when(!missing.is_empty() || self.installing_toolchains, |this| {
                 this.child(
-                    Button::new("install-toolchains", install_label)
-                        .style(ButtonStyle::Filled)
-                        .full_width()
-                        .disabled(self.installing_toolchains)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.install_missing_toolchains(window, cx)
-                        })),
+                    h_flex().pt_1().child(
+                        primary_button("install-toolchains", install_label)
+                            .disabled(self.installing_toolchains)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.install_missing_toolchains(window, cx)
+                            })),
+                    ),
                 )
             })
+            .when(
+                probe
+                    .toolchains
+                    .iter()
+                    .any(|status| !status.used_by_project),
+                |this| {
+                    this.child(caption(
+                        "Dimmed toolchains are installed but the project does not use them.",
+                    ))
+                },
+            )
             .into_any_element()
     }
 
@@ -930,10 +989,15 @@ impl SandboxPanel {
                                 h_flex()
                                     .min_w_0()
                                     .gap_2()
-                                    .child(
-                                        Chip::new(rule.decision.clone())
-                                            .label_color(decision_color),
-                                    )
+                                    .child(badge(
+                                        rule.decision.clone(),
+                                        if decision_color == Color::Success {
+                                            Tone::Ok
+                                        } else {
+                                            Tone::Error
+                                        },
+                                        cx,
+                                    ))
                                     .child(
                                         Label::new(rule.resources.join(", "))
                                             .size(LabelSize::Small)
@@ -1365,21 +1429,17 @@ fn render_resource_settings(snapshot: &Snapshot) -> impl IntoElement {
         ))
 }
 
-fn metric_card(label: &'static str, value: u64, color: Color, cx: &App) -> impl IntoElement {
+fn metric_card(label: &'static str, value: u64, color: Color, _cx: &App) -> impl IntoElement {
     v_flex()
         .flex_1()
-        .p_2()
-        .gap_1()
-        .rounded_md()
-        .border_1()
-        .border_color(cx.theme().colors().border_variant)
-        .bg(cx.theme().colors().element_background)
+        .gap_0p5()
         .child(
             Label::new(value.to_string())
                 .size(LabelSize::Large)
+                .weight(FontWeight::SEMIBOLD)
                 .color(color),
         )
-        .child(muted(label))
+        .child(caption(label))
 }
 
 fn render_published_ports(snapshot: &Snapshot) -> impl IntoElement {
@@ -1461,7 +1521,7 @@ fn render_repositories(snapshot: &Snapshot, cx: &App) -> impl IntoElement {
         }))
 }
 
-fn render_network(snapshot: &Snapshot) -> impl IntoElement {
+fn render_network(snapshot: &Snapshot, cx: &App) -> impl IntoElement {
     let mut recent = snapshot.network.allowed.clone();
     recent.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
     recent.truncate(RECENT_HOSTS);
@@ -1483,7 +1543,15 @@ fn render_network(snapshot: &Snapshot) -> impl IntoElement {
                     };
                     h_flex()
                         .gap_2()
-                        .child(Chip::new(rule.decision.clone()).label_color(color))
+                        .child(badge(
+                            rule.decision.clone(),
+                            if color == Color::Success {
+                                Tone::Ok
+                            } else {
+                                Tone::Error
+                            },
+                            cx,
+                        ))
                         .child(Label::new(rule.resources.join(", ")).size(LabelSize::Small))
                         .child(muted(rule.scope.clone().unwrap_or_default()))
                 }),

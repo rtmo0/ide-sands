@@ -260,6 +260,55 @@ pub struct SandboxProbe {
     pub claude_status_hook: bool,
 }
 
+/// What `sbx login` asks the user to do in the browser.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoginPrompt {
+    /// The one-time device code, such as `ABCD-EFGH`.
+    pub code: Option<String>,
+    /// The page that asks for the code.
+    pub url: Option<String>,
+}
+
+impl LoginPrompt {
+    /// Picks the code and the URL out of a line of `sbx login` output. Returns whether either
+    /// was new.
+    fn read(&mut self, line: &str) -> bool {
+        let mut changed = false;
+        for word in line.split_whitespace() {
+            let word = word.trim_matches(|character: char| {
+                matches!(character, '"' | '\'' | '(' | ')' | '<' | '>')
+            });
+            if (word.starts_with("https://") || word.starts_with("http://"))
+                && self.url.as_deref() != Some(word)
+            {
+                self.url = Some(word.trim_end_matches(['.', ',']).to_string());
+                changed = true;
+            } else {
+                let word = word.trim_end_matches(['.', ',', ':']);
+                if is_device_code(word) && self.code.as_deref() != Some(word) {
+                    self.code = Some(word.to_string());
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+}
+
+/// Device codes look like `ABCD-EFGH`: two groups of four uppercase letters or digits.
+fn is_device_code(word: &str) -> bool {
+    let Some((first, second)) = word.split_once('-') else {
+        return false;
+    };
+    let group = |part: &str| {
+        part.len() == 4
+            && part
+                .chars()
+                .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit())
+    };
+    group(first) && group(second)
+}
+
 /// One usage limit of an agent subscription, such as the 5-hour or the weekly window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UsageWindow {
@@ -677,6 +726,80 @@ impl Sbx {
                 &display_command(&["exec", name, "true"]),
                 &output.stderr,
             ))
+        }
+    }
+
+    /// Starts the Docker Sandboxes daemon in the background. It takes a few seconds to accept
+    /// commands; callers wait for [`DiagnoseReport::ensure_ready`] to stop reporting it.
+    pub async fn start_daemon(&self) -> Result<(), SbxError> {
+        self.run_success(&["daemon", "start", "--detach"]).await
+    }
+
+    /// Signs in to Docker with the browser device flow. `on_prompt` receives the one-time code
+    /// and the confirmation URL as soon as `sbx login` prints them; the call returns when the
+    /// sign-in finishes.
+    pub async fn login(
+        &self,
+        mut on_prompt: impl FnMut(LoginPrompt) + Send,
+    ) -> Result<(), SbxError> {
+        use futures::{AsyncBufReadExt as _, AsyncWriteExt as _};
+
+        let command = "sbx login";
+        // The device code goes to stdout and the progress to stderr; one stream keeps the order.
+        let mut child = new_command("/bin/sh")
+            .arg("-c")
+            .arg("exec \"$0\" login 2>&1")
+            .arg(&self.executable)
+            .stdin(util::command::Stdio::piped())
+            .stdout(util::command::Stdio::piped())
+            .stderr(util::command::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|source| SbxError::Spawn {
+                command: command.to_string(),
+                source,
+            })?;
+        let mut stdin = child.stdin.take();
+        let stdout = child.stdout.take().ok_or_else(|| SbxError::CommandFailed {
+            command: command.to_string(),
+            message: "sbx login has no output pipe".to_string(),
+        })?;
+        let mut lines = futures::io::BufReader::new(stdout).lines();
+        let mut output = Vec::new();
+        let mut prompt = LoginPrompt::default();
+        while let Some(line) = futures::StreamExt::next(&mut lines).await {
+            let Ok(line) = line else {
+                break;
+            };
+            let changed = prompt.read(&line);
+            output.push(line);
+            if changed {
+                on_prompt(prompt.clone());
+                // `sbx login` waits for Enter before it opens the browser.
+                if let Some(mut input) = stdin.take() {
+                    input.write_all(b"\n").await.ok();
+                    input.flush().await.ok();
+                    stdin = Some(input);
+                }
+            }
+        }
+        let status = child.status().await.map_err(|source| SbxError::Spawn {
+            command: command.to_string(),
+            source,
+        })?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(SbxError::CommandFailed {
+                command: command.to_string(),
+                message: output
+                    .iter()
+                    .rev()
+                    .map(|line| line.trim())
+                    .find(|line| !line.is_empty())
+                    .unwrap_or("sign-in failed")
+                    .to_string(),
+            })
         }
     }
 
@@ -1930,6 +2053,25 @@ mod tests {
                 "/work/docs:ro"
             ]
         );
+    }
+
+    #[test]
+    fn reads_login_prompts() {
+        let mut prompt = LoginPrompt::default();
+        assert!(!prompt.read("Signing in to Docker…"));
+        assert!(prompt.read("Your one-time device confirmation code is: XK7Q-M2PL"));
+        assert!(prompt.read(
+            "Press ENTER to open your browser or submit your device code here: https://login.docker.com/activate"
+        ));
+        assert!(!prompt.read("Your one-time device confirmation code is: XK7Q-M2PL"));
+        assert_eq!(
+            prompt,
+            LoginPrompt {
+                code: Some("XK7Q-M2PL".to_string()),
+                url: Some("https://login.docker.com/activate".to_string()),
+            }
+        );
+        assert!(!is_device_code("non-code"));
     }
 
     #[test]
