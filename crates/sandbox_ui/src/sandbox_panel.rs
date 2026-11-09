@@ -22,8 +22,8 @@ use workspace::{
 use crate::{
     connected_sandbox,
     design::{
-        Meter, Tone, badge, caption, icon_button, key_value, primary_button, section_header,
-        status_dot,
+        Meter, Tone, badge, caption, icon_button, key_value, primary_button, secondary_button,
+        section_header, status_dot,
     },
     new_project_modal::agent_icon,
     sbx_problem::{Problem, ProblemFixed, SbxProblemView, problem_view},
@@ -636,13 +636,13 @@ impl SandboxPanel {
                 .gap_2()
                 .child(muted("No Kubernetes cluster is connected to this project."))
                 .child(
-                    Button::new("connect-kubernetes", import_label)
-                        .style(ButtonStyle::Filled)
-                        .full_width()
-                        .disabled(self.connecting_kubernetes)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.connect_kubernetes(window, cx)
-                        })),
+                    h_flex().child(
+                        primary_button("connect-kubernetes", import_label)
+                            .disabled(self.connecting_kubernetes)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.connect_kubernetes(window, cx)
+                            })),
+                    ),
                 )
                 .child(muted(
                     "The active context is copied into this sandbox. Its bearer token remains on the host and is injected only into requests to the cluster API.",
@@ -656,43 +656,43 @@ impl SandboxPanel {
                         .color(Color::Error),
                 )
                 .child(
-                    Button::new("replace-kubernetes", replace_label)
-                        .style(ButtonStyle::Outlined)
-                        .full_width()
-                        .disabled(self.connecting_kubernetes)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.connect_kubernetes(window, cx)
-                        })),
+                    h_flex().child(
+                        secondary_button("replace-kubernetes", replace_label)
+                            .disabled(self.connecting_kubernetes)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.connect_kubernetes(window, cx)
+                            })),
+                    ),
                 )
                 .into_any_element(),
             KubernetesState::Connected(overview) => v_flex()
                 .gap_3()
                 .child(render_kubernetes_summary(overview, cx))
                 .child(
-                    Button::new("open-kubernetes", "Open Kubernetes")
-                        .style(ButtonStyle::Filled)
-                        .full_width()
-                        .start_icon(Icon::new(IconName::Blocks).size(IconSize::Small))
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(crate::kubernetes_view::OpenKubernetes.boxed_clone(), cx)
-                        }),
+                    h_flex()
+                        .gap_2()
+                        .child(primary_button("open-kubernetes", "Open Kubernetes").on_click(
+                            |_, window, cx| {
+                                window.dispatch_action(
+                                    crate::kubernetes_view::OpenKubernetes.boxed_clone(),
+                                    cx,
+                                )
+                            },
+                        ))
+                        .child(
+                            secondary_button("replace-kubernetes", replace_label)
+                                .disabled(self.connecting_kubernetes)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.connect_kubernetes(window, cx)
+                                })),
+                        ),
                 )
-                .child(muted(
+                .child(caption(
                     "kubectl and helm are available to this project's terminals and agents.",
                 ))
-                .child(
-                    Button::new("replace-kubernetes", replace_label)
-                        .style(ButtonStyle::Subtle)
-                        .full_width()
-                        .disabled(self.connecting_kubernetes)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.connect_kubernetes(window, cx)
-                        })),
-                )
                 .into_any_element(),
         };
         v_flex()
-            .p_3()
             .child(section("Cluster", IconName::Blocks, content, cx))
             .into_any_element()
     }
@@ -1137,50 +1137,36 @@ async fn load_snapshot(name: String) -> anyhow::Result<Snapshot> {
 
 fn render_kubernetes_summary(overview: &KubernetesOverview, cx: &App) -> impl IntoElement {
     let nodes = match overview.total_nodes {
-        Some(total) => format!("{}/{total}", overview.ready_nodes),
+        Some(total) => format!("{}/{total} ready", overview.ready_nodes),
         None => "—".to_string(),
     };
     let pods = match overview.total_pods {
-        Some(total) => format!("{}/{total}", overview.running_pods),
+        Some(total) => format!("{}/{total} running", overview.running_pods),
         None => "—".to_string(),
     };
+    let healthy = overview
+        .total_nodes
+        .is_none_or(|total| total == overview.ready_nodes);
     v_flex()
-        .gap_2()
-        .child(
-            v_flex()
-                .child(Label::new(overview.context.clone()).truncate())
-                .child(
-                    Label::new(format!("{} · {}", overview.server, overview.version))
-                        .size(LabelSize::Small)
-                        .color(Color::Muted)
-                        .truncate(),
-                ),
-        )
+        .gap_1()
         .child(
             h_flex()
                 .gap_2()
-                .child(stat_tile("Nodes ready", nodes, cx))
-                .child(stat_tile("Pods running", pods, cx))
-                .child(stat_tile("Namespace", overview.namespace.clone(), cx)),
+                .child(status_dot(if healthy { Tone::Ok } else { Tone::Error }, cx))
+                .child(
+                    Label::new(overview.context.clone())
+                        .size(LabelSize::Small)
+                        .weight(FontWeight::MEDIUM)
+                        .truncate(),
+                ),
         )
-}
-
-fn stat_tile(label: &'static str, value: String, cx: &App) -> impl IntoElement {
-    v_flex()
-        .flex_1()
-        .min_w_0()
-        .p_2()
-        .gap_0p5()
-        .rounded_md()
-        .border_1()
-        .border_color(cx.theme().colors().border_variant)
-        .bg(cx.theme().colors().element_background)
-        .child(Label::new(value).truncate())
-        .child(
-            Label::new(label)
-                .size(LabelSize::XSmall)
-                .color(Color::Muted),
-        )
+        .child(caption(format!("{} · {}", overview.server, overview.version)).truncate())
+        .child(key_value("Nodes", Label::new(nodes).size(LabelSize::Small)))
+        .child(key_value("Pods", Label::new(pods).size(LabelSize::Small)))
+        .child(key_value(
+            "Namespace",
+            Label::new(overview.namespace.clone()).size(LabelSize::Small),
+        ))
 }
 
 fn render_resources(snapshot: &Snapshot, _cx: &App) -> impl IntoElement {
@@ -1366,7 +1352,7 @@ fn render_agent(snapshot: &Snapshot, cx: &App) -> impl IntoElement {
 }
 
 /// "2h 14m", or "3d 4h" for windows a few days away.
-fn format_reset(resets_at: i64, now: i64) -> String {
+pub(crate) fn format_reset(resets_at: i64, now: i64) -> String {
     let minutes = (resets_at - now).max(0) / 60;
     let (days, hours, minutes) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
     let local = chrono::DateTime::from_timestamp(resets_at, 0)

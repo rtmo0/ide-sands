@@ -25,6 +25,7 @@ use workspace::{
     with_active_or_new_workspace,
 };
 
+mod agent_status;
 mod design;
 mod kubernetes_view;
 mod new_project_modal;
@@ -74,6 +75,7 @@ pub fn init(cx: &mut App) {
             workspace.toggle_modal(window, cx, SandboxModal::new);
         });
     });
+    agent_status::init(cx);
     kubernetes_view::init(cx);
     projects_panel::init(cx);
     sandbox_panel::init(cx);

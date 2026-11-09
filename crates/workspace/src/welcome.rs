@@ -399,7 +399,10 @@ impl WelcomePage {
 
         let (icon, title) = match location {
             SerializedWorkspaceLocation::Local => (IconName::Folder, name),
-            SerializedWorkspaceLocation::Remote(_) => (IconName::Server, name),
+            SerializedWorkspaceLocation::Remote(options) => (
+                IconName::Server,
+                remote_project_name(&options.display_name(), name),
+            ),
         };
 
         SectionButton::new(
@@ -655,6 +658,16 @@ mod persistence {
     }
 }
 
+/// A remote project by its host: Sands sandboxes keep their code in a folder named `workspace`,
+/// so the sandbox name is what tells them apart.
+fn remote_project_name(host: &str, folders: String) -> String {
+    if folders == "workspace" || folders == "Untitled" {
+        host.to_string()
+    } else {
+        format!("{host} · {folders}")
+    }
+}
+
 fn project_name(paths: &PathList) -> String {
     let joined = paths
         .paths()
@@ -672,6 +685,18 @@ fn project_name(paths: &PathList) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_remote_projects_by_host() {
+        assert_eq!(
+            remote_project_name("spike", "workspace".to_string()),
+            "spike"
+        );
+        assert_eq!(
+            remote_project_name("t-project", "t.project".to_string()),
+            "t-project · t.project"
+        );
+    }
 
     #[test]
     fn test_project_name_empty() {

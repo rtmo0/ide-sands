@@ -539,6 +539,18 @@ pub const KNOWN_AGENT_COMMANDS: [&str; 7] = [
     "kiro",
 ];
 
+/// Prints what agents last reported about their usage, as `agent_status=` lines. Part of the
+/// probe, and run on its own by the status bar, which refreshes more often.
+const AGENT_STATUS_SCRIPT: &str = r#"claude_status="$HOME/.sands/agent-status/claude.json"
+[ -s "$claude_status" ] && echo "agent_status=claude|$(stat -c %Y "$claude_status")|$(base64 -w0 < "$claude_status")"
+grep -qs 'sands/claude-statusline.sh' "$HOME/.claude/settings.json" && echo "claude_status_hook=1"
+codex_session=$(find "$HOME/.codex/sessions" -name '*.jsonl' -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d ' ' -f 2-)
+if [ -n "$codex_session" ]; then
+  codex_event=$(grep '"used_percent"' "$codex_session" | tail -n 1)
+  [ -n "$codex_event" ] && echo "agent_status=codex|$(stat -c %Y "$codex_session")|$(printf '%s' "$codex_event" | base64 -w0)"
+fi
+"#;
+
 const PROBE_SCRIPT: &str = r#"
 echo "cpus=$(nproc)"
 awk '/^MemTotal:/ {print "memory_total_kb=" $2} /^MemAvailable:/ {print "memory_available_kb=" $2}' /proc/meminfo
@@ -558,14 +570,7 @@ command -v dart >/dev/null 2>&1 && echo "toolchain=flutter|$(dart --version 2>&1
 command -v rustc >/dev/null 2>&1 && echo "toolchain=rust|$(rustc --version 2>/dev/null | cut -d ' ' -f 2)"
 command -v dotnet >/dev/null 2>&1 && echo "toolchain=dotnet|$(dotnet --version 2>/dev/null)"
 command -v clangd >/dev/null 2>&1 && echo "toolchain=cpp|$(clangd --version 2>/dev/null | head -n 1 | grep -o '[0-9][0-9.]*' | head -n 1)"
-claude_status="$HOME/.sands/agent-status/claude.json"
-[ -s "$claude_status" ] && echo "agent_status=claude|$(stat -c %Y "$claude_status")|$(base64 -w0 < "$claude_status")"
-grep -qs 'sands/claude-statusline.sh' "$HOME/.claude/settings.json" && echo "claude_status_hook=1"
-codex_session=$(find "$HOME/.codex/sessions" -name '*.jsonl' -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d ' ' -f 2-)
-if [ -n "$codex_session" ]; then
-  codex_event=$(grep '"used_percent"' "$codex_session" | tail -n 1)
-  [ -n "$codex_event" ] && echo "agent_status=codex|$(stat -c %Y "$codex_session")|$(printf '%s' "$codex_event" | base64 -w0)"
-fi
+AGENT_STATUS
 exit 0
 "#;
 
@@ -1107,7 +1112,9 @@ impl Sbx {
     /// Collects resources, listening ports, repositories and agents from inside the sandbox.
     /// Starts the sandbox if it is stopped.
     pub async fn probe(&self, name: &str) -> Result<SandboxProbe, SbxError> {
-        let script = PROBE_SCRIPT.replace("AGENTS", &KNOWN_AGENT_COMMANDS.join(" "));
+        let script = PROBE_SCRIPT
+            .replace("AGENTS", &KNOWN_AGENT_COMMANDS.join(" "))
+            .replace("AGENT_STATUS", AGENT_STATUS_SCRIPT);
         // A login shell picks up toolchains that installation added to `~/.profile`.
         let output = self.exec(name, &["bash", "-lc", script.as_str()]).await?;
         if !output.status.success() && output.stdout.is_empty() {
@@ -1117,6 +1124,15 @@ impl Sbx {
             ));
         }
         Ok(parse_probe(&String::from_utf8_lossy(&output.stdout)))
+    }
+
+    /// What the sandbox's agents last reported about their limits, without the rest of the
+    /// probe. Starts the sandbox if it is stopped, so callers check its status first.
+    pub async fn agent_usage(&self, name: &str) -> Result<Vec<AgentUsage>, SbxError> {
+        let output = self
+            .exec(name, &["bash", "-c", AGENT_STATUS_SCRIPT])
+            .await?;
+        Ok(parse_probe(&String::from_utf8_lossy(&output.stdout)).agent_usage)
     }
 
     /// Makes Claude Code in the sandbox report its limits, cost and context through its status

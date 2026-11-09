@@ -1659,7 +1659,7 @@ impl KubernetesView {
                                 this.open_link(link.clone(), window, cx)
                             }))
                     })
-                    .child(div().w(px(150.)).flex_none().child(badge(
+                    .child(h_flex().w(px(150.)).flex_none().child(badge(
                         warning.reason.clone(),
                         Tone::Warn,
                         cx,
