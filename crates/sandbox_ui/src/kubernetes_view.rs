@@ -381,6 +381,29 @@ impl KubernetesView {
         view
     }
 
+    /// Starts over after the sandbox switched to another cluster: everything shown belongs to
+    /// the previous context.
+    pub(crate) fn restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.context = Loadable::default();
+        self.page = Page::Overview;
+        self.namespace = None;
+        self.namespaces.clear();
+        self.custom_kinds.clear();
+        self.overview = Loadable::default();
+        self.table = Loadable::default();
+        self.sort = None;
+        self.selection = None;
+        self.drawer = Loadable::default();
+        self.prompt = None;
+        self.revealed.clear();
+        self.history.clear();
+        self.status = None;
+        self._load = Task::ready(());
+        self._drawer = Task::ready(());
+        self.start(window, cx);
+        cx.notify();
+    }
+
     fn search_changed(&mut self, cx: &mut Context<Self>) {
         cx.notify();
     }

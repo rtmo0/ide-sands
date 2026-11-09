@@ -17,17 +17,22 @@ anyhow.workspace = true
 chrono.workspace = true
 collections.workspace = true
 editor.workspace = true
+file_icons.workspace = true
 futures.workspace = true
 fuzzy_nucleo.workspace = true
 gpui.workspace = true
 kubernetes.workspace = true
 language.workspace = true
+log.workspace = true
 menu.workspace = true
+paths.workspace = true
 picker.workspace = true
 project.workspace = true
 recent_projects.workspace = true
 remote.workspace = true
 sbx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 sysinfo.workspace = true
 task.workspace = true
 ui.workspace = true
@@ -37,3 +42,4 @@ workspace.workspace = true
 
 [dev-dependencies]
 smol.workspace = true
+tempfile.workspace = true

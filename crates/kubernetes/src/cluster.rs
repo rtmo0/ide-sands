@@ -30,6 +30,17 @@ pub struct ContextInfo {
     pub namespace: String,
 }
 
+/// One cluster connected to the sandbox, as its kubeconfig context, with a quick health check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClusterStatus {
+    pub context: ContextInfo,
+    pub current: bool,
+    pub version: Option<String>,
+    pub ready_nodes: usize,
+    pub total_nodes: Option<usize>,
+    pub error: Option<String>,
+}
+
 /// The objects of one list request. Without cluster-wide list rights the list falls back to the
 /// context namespace and says so in `notice`.
 #[derive(Clone, Debug, Default)]
@@ -205,6 +216,89 @@ impl Cluster {
                 .unwrap_or("default")
                 .to_string(),
         }))
+    }
+
+    /// Every context of the sandbox kubeconfig, and which one kubectl uses now.
+    pub async fn contexts(&self) -> Result<(Vec<ContextInfo>, Option<String>)> {
+        let output = self.kubectl(&["config", "view", "-o", "json"]).await?;
+        if !output.success() {
+            return Ok((Vec::new(), None));
+        }
+        let configuration: JsonValue = serde_json::from_slice(&output.stdout)
+            .context("kubectl config view returned invalid JSON")?;
+        Ok(parse_contexts(&configuration))
+    }
+
+    pub async fn use_context(&self, context: &str) -> Result<()> {
+        self.kubectl_success(&["config", "use-context", context])
+            .await
+            .map(|_| ())
+    }
+
+    /// Checks every connected cluster in one round trip: server version and node readiness.
+    pub async fn statuses(&self) -> Result<Vec<ClusterStatus>> {
+        let (contexts, current) = self.contexts().await?;
+        let commands = contexts
+            .iter()
+            .flat_map(|context| {
+                [
+                    vec!["version", "-o", "json"],
+                    vec!["get", "nodes", "-o", "json"],
+                ]
+                .map(|command| {
+                    // An unreachable cluster should not hold up the others for long.
+                    ["--context", context.context.as_str(), "--request-timeout=8s"]
+                        .into_iter()
+                        .chain(command)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let outputs = self.kubectl_batch(&commands).await?;
+        Ok(contexts
+            .into_iter()
+            .enumerate()
+            .map(|(index, context)| {
+                let version_output = outputs.get(index * 2);
+                let nodes = outputs
+                    .get(index * 2 + 1)
+                    .filter(|output| output.success())
+                    .map(parse_list_output);
+                let version = version_output
+                    .filter(|output| output.success())
+                    .and_then(|output| serde_json::from_slice::<JsonValue>(&output.stdout).ok())
+                    .and_then(|version| {
+                        version
+                            .pointer("/serverVersion/gitVersion")
+                            .and_then(JsonValue::as_str)
+                            .map(str::to_string)
+                    });
+                let error = match version_output {
+                    Some(output) if output.success() => None,
+                    Some(output) => Some(
+                        String::from_utf8_lossy(&output.stderr)
+                            .lines()
+                            .find(|line| !line.trim().is_empty())
+                            .unwrap_or("the cluster did not answer")
+                            .to_string(),
+                    ),
+                    None => Some("the cluster was not checked".to_string()),
+                };
+                ClusterStatus {
+                    current: current.as_deref() == Some(context.context.as_str()),
+                    version,
+                    ready_nodes: nodes
+                        .iter()
+                        .flatten()
+                        .filter(|node| crate::table::node_ready(node))
+                        .count(),
+                    total_nodes: nodes.as_ref().map(Vec::len),
+                    error,
+                    context,
+                }
+            })
+            .collect())
     }
 
     pub async fn server_version(&self) -> Result<String> {
@@ -665,6 +759,46 @@ impl Cluster {
         let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
         self.kubectl_success(&arguments).await
     }
+}
+
+fn parse_contexts(configuration: &JsonValue) -> (Vec<ContextInfo>, Option<String>) {
+    let entries = |key: &str| {
+        configuration
+            .get(key)
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let clusters = entries("clusters");
+    let contexts = entries("contexts")
+        .iter()
+        .filter_map(|context| {
+            let name = context.get("name")?.as_str()?.to_string();
+            let cluster = context.pointer("/context/cluster").and_then(JsonValue::as_str);
+            let server = clusters
+                .iter()
+                .find(|candidate| candidate.get("name").and_then(JsonValue::as_str) == cluster)
+                .and_then(|candidate| candidate.pointer("/cluster/server"))
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default()
+                .to_string();
+            Some(ContextInfo {
+                context: name,
+                server,
+                namespace: context
+                    .pointer("/context/namespace")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("default")
+                    .to_string(),
+            })
+        })
+        .collect();
+    let current = configuration
+        .get("current-context")
+        .and_then(JsonValue::as_str)
+        .filter(|context| !context.is_empty())
+        .map(str::to_string);
+    (contexts, current)
 }
 
 pub fn shell_quote(argument: &str) -> String {

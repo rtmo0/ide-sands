@@ -1,6 +1,10 @@
+use std::path::{Path, PathBuf};
+
+use file_icons::FileIcons;
 use gpui::{
-    Action, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, Pixels, SharedString, Subscription, Task, WeakEntity, actions, px,
+    Action, AnyElement, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter,
+    FocusHandle, Focusable, FontWeight, Pixels, SharedString, Subscription, Task, WeakEntity,
+    actions, px,
 };
 use sbx::{SandboxInfo, SandboxStatus};
 use ui::prelude::*;
@@ -11,7 +15,7 @@ use workspace::{
 };
 
 use crate::{
-    connected_sandbox,
+    connected_sandbox, connections,
     design::{Tone, caption, icon_button, primary_button, status_dot},
     list_sandboxes,
     new_project_modal::{NewProjectModal, agent_icon},
@@ -52,14 +56,23 @@ pub(crate) fn init(cx: &mut App) {
     .detach();
 }
 
+/// A language of a project: its name and a file name whose icon stands for it.
+type ProjectLanguage = (&'static str, &'static str);
+
+#[derive(Clone)]
+struct Project {
+    info: SandboxInfo,
+    languages: Vec<ProjectLanguage>,
+}
+
 /// The last project list, shared by the Projects panels of all windows and projects.
-struct ProjectsCache(Vec<SandboxInfo>);
+struct ProjectsCache(Vec<Project>);
 
 impl gpui::Global for ProjectsCache {}
 
 enum ProjectList {
     Loading,
-    Loaded(Vec<SandboxInfo>),
+    Loaded(Vec<Project>),
     Failed(SharedString),
     /// A problem a button fixes, such as a stopped daemon or a missing sign-in.
     Problem(Entity<SbxProblemView>),
@@ -75,6 +88,7 @@ pub struct ProjectsPanel {
     opening: Option<String>,
     _refresh: Task<()>,
     _problem_subscription: Option<Subscription>,
+    _connections_subscription: Subscription,
 }
 
 impl ProjectsPanel {
@@ -98,6 +112,7 @@ impl ProjectsPanel {
                     opening: None,
                     _refresh: Task::ready(()),
                     _problem_subscription: None,
+                    _connections_subscription: connections::observe(cx),
                 };
                 panel.refresh(window, cx);
                 panel
@@ -107,7 +122,18 @@ impl ProjectsPanel {
 
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self._refresh = cx.spawn_in(window, async move |this, cx| {
-            let result = cx.background_spawn(list_sandboxes()).await;
+            let result = cx
+                .background_spawn(async move {
+                    let sandboxes = list_sandboxes().await?;
+                    Ok(sandboxes
+                        .into_iter()
+                        .map(|info| Project {
+                            languages: detect_languages(&info.workspaces),
+                            info,
+                        })
+                        .collect::<Vec<_>>())
+                })
+                .await;
             this.update_in(cx, |this, window, cx| {
                 this.projects = match result {
                     Ok(sandboxes) => {
@@ -135,7 +161,7 @@ impl ProjectsPanel {
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let count = match &self.projects {
-            ProjectList::Loaded(sandboxes) => Some(sandboxes.len()),
+            ProjectList::Loaded(projects) => Some(projects.len()),
             _ => None,
         };
         h_flex()
@@ -211,7 +237,7 @@ impl ProjectsPanel {
                         ),
                     );
             }
-            ProjectList::Loaded(sandboxes) => sandboxes,
+            ProjectList::Loaded(projects) => projects,
         };
 
         let current = self
@@ -224,7 +250,8 @@ impl ProjectsPanel {
         v_flex()
             .p_1p5()
             .gap_px()
-            .children(sandboxes.iter().enumerate().map(|(index, sandbox)| {
+            .children(sandboxes.iter().enumerate().map(|(index, project)| {
+                let sandbox = &project.info;
                 let selected = current.as_deref() == Some(sandbox.name.as_str());
                 let opening = !selected && self.opening.as_deref() == Some(sandbox.name.as_str());
                 let tone = match sandbox.status {
@@ -243,8 +270,7 @@ impl ProjectsPanel {
                     .filter_map(|path| std::path::Path::new(path).file_name())
                     .map(|name| name.to_string_lossy().into_owned())
                     .collect::<Vec<_>>();
-                let mut details = vec![crate::agent_display_name(&sandbox.agent).to_string()];
-                details.extend(repositories);
+                let labels = project_labels(project, cx);
                 let name = sandbox.name.clone();
                 let hover = colors.ghost_element_hover;
                 h_flex()
@@ -286,29 +312,198 @@ impl ProjectsPanel {
                                         Label::new(age).size(LabelSize::XSmall).color(Color::Muted)
                                     })),
                             )
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .min_w_0()
-                                    .child(
-                                        Icon::new(agent_icon(&sandbox.agent))
-                                            .size(IconSize::XSmall)
-                                            .color(Color::Muted),
-                                    )
-                                    .child(
-                                        Label::new(if opening {
-                                            "Connecting…".to_string()
-                                        } else {
-                                            details.join(" · ")
-                                        })
-                                        .size(LabelSize::XSmall)
-                                        .color(if opening { Color::Accent } else { Color::Muted })
-                                        .truncate(),
-                                    ),
-                            ),
+                            .when(opening || !repositories.is_empty(), |this| {
+                                this.child(
+                                    Label::new(if opening {
+                                        "Connecting…".to_string()
+                                    } else {
+                                        repositories.join(" · ")
+                                    })
+                                    .size(LabelSize::XSmall)
+                                    .color(if opening { Color::Accent } else { Color::Muted })
+                                    .truncate(),
+                                )
+                            })
+                            .child(h_flex().pt_0p5().gap_1().flex_wrap().children(labels)),
                     )
             }))
     }
+}
+
+/// What a project consists of and is connected to, as small labels: the agent, the languages of
+/// its repositories and the Kubernetes clusters of its sandbox.
+fn project_labels(project: &Project, cx: &App) -> Vec<AnyElement> {
+    let mut labels = vec![label(
+        Icon::new(agent_icon(&project.info.agent)).color(Color::Muted),
+        crate::agent_display_name(&project.info.agent),
+        cx,
+    )];
+    for (language, sample_file) in &project.languages {
+        let icon = match FileIcons::get_icon(Path::new(sample_file), cx) {
+            Some(path) => Icon::from_path(path),
+            None => Icon::new(IconName::FileCode).color(Color::Muted),
+        };
+        labels.push(label(icon, language, cx));
+    }
+    let connected = connections::connections(&project.info.name, cx);
+    if !connected.kubernetes.is_empty() {
+        labels.push(label(
+            Icon::new(IconName::Kubernetes).color(Color::Muted),
+            &connected.kubernetes.join(", "),
+            cx,
+        ));
+    }
+    labels
+}
+
+fn label(icon: Icon, text: &str, cx: &App) -> AnyElement {
+    h_flex()
+        .flex_none()
+        .h(px(18.))
+        .px_1()
+        .gap_1()
+        .rounded_sm()
+        .bg(cx.theme().colors().element_background)
+        .child(icon.size(IconSize::XSmall))
+        .child(
+            Label::new(text.to_string())
+                .size(LabelSize::XSmall)
+                .color(Color::Muted)
+                .single_line(),
+        )
+        .into_any_element()
+}
+
+/// Finds the languages of a project from the source files of its repositories on the host, most
+/// files first. A Flutter app lists its platform code too: Kotlin and Java for Android, Swift and
+/// Objective-C for iOS and macOS, C++ for the desktop runners. Dependencies, build output and
+/// generated platform files are skipped, and the walk is bounded so huge trees stay cheap.
+fn detect_languages(workspaces: &[String]) -> Vec<ProjectLanguage> {
+    const EXTENSIONS: [(&str, ProjectLanguage); 31] = [
+        ("go", ("Go", "main.go")),
+        ("rs", ("Rust", "main.rs")),
+        ("ts", ("TypeScript", "index.ts")),
+        ("tsx", ("TypeScript", "index.ts")),
+        ("mts", ("TypeScript", "index.ts")),
+        ("js", ("JavaScript", "index.js")),
+        ("jsx", ("JavaScript", "index.js")),
+        ("mjs", ("JavaScript", "index.js")),
+        ("py", ("Python", "main.py")),
+        ("dart", ("Dart", "main.dart")),
+        ("kt", ("Kotlin", "Main.kt")),
+        ("kts", ("Kotlin", "Main.kt")),
+        ("java", ("Java", "Main.java")),
+        ("swift", ("Swift", "main.swift")),
+        ("m", ("Objective-C", "main.m")),
+        ("mm", ("Objective-C", "main.m")),
+        ("c", ("C", "main.c")),
+        ("cc", ("C++", "main.cpp")),
+        ("cpp", ("C++", "main.cpp")),
+        ("cxx", ("C++", "main.cpp")),
+        ("hpp", ("C++", "main.cpp")),
+        ("cs", ("C#", "Program.cs")),
+        ("rb", ("Ruby", "main.rb")),
+        ("php", ("PHP", "index.php")),
+        ("scala", ("Scala", "Main.scala")),
+        ("ex", ("Elixir", "main.ex")),
+        ("exs", ("Elixir", "main.ex")),
+        ("lua", ("Lua", "main.lua")),
+        ("zig", ("Zig", "main.zig")),
+        ("hs", ("Haskell", "Main.hs")),
+        ("sh", ("Shell", "script.sh")),
+    ];
+    const FLUTTER: ProjectLanguage = ("Flutter", "main.dart");
+    const MAX_DEPTH: usize = 12;
+    const MAX_DIRECTORIES: usize = 5000;
+    const SKIPPED: [&str; 16] = [
+        "node_modules",
+        "vendor",
+        "target",
+        "build",
+        "dist",
+        "out",
+        "Pods",
+        "DerivedData",
+        "ephemeral",
+        "Flutter",
+        "generated",
+        "third_party",
+        "__pycache__",
+        "venv",
+        "env",
+        "site-packages",
+    ];
+
+    let mut counts: Vec<(ProjectLanguage, usize)> = Vec::new();
+    let mut is_flutter = false;
+    let mut queue = workspaces
+        .iter()
+        .map(|workspace| (PathBuf::from(workspace), 0))
+        .collect::<std::collections::VecDeque<_>>();
+    let mut visited = 0;
+    while let Some((directory, depth)) = queue.pop_front() {
+        visited += 1;
+        if visited > MAX_DIRECTORIES {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                if depth < MAX_DEPTH
+                    && !file_name.starts_with('.')
+                    && !SKIPPED.contains(&file_name.as_ref())
+                {
+                    queue.push_back((entry.path(), depth + 1));
+                }
+                continue;
+            }
+            if file_name == "pubspec.yaml"
+                && std::fs::read_to_string(entry.path())
+                    .is_ok_and(|pubspec| pubspec.contains("sdk: flutter"))
+            {
+                is_flutter = true;
+            }
+            let Some(extension) = Path::new(file_name.as_ref())
+                .extension()
+                .and_then(|extension| extension.to_str())
+            else {
+                continue;
+            };
+            let Some(language) = EXTENSIONS
+                .iter()
+                .find(|(candidate, _)| *candidate == extension)
+                .map(|(_, language)| *language)
+            else {
+                continue;
+            };
+            match counts.iter_mut().find(|(found, _)| *found == language) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((language, 1)),
+            }
+        }
+    }
+    // Configuration scripts of a TypeScript project are JavaScript; it is not a language of it.
+    if counts.iter().any(|((name, _), _)| *name == "TypeScript") {
+        counts.retain(|((name, _), _)| *name != "JavaScript");
+    }
+    counts.sort_by(|(_, left), (_, right)| right.cmp(left));
+    counts
+        .into_iter()
+        .map(|(language, _)| {
+            if is_flutter && language.0 == "Dart" {
+                FLUTTER
+            } else {
+                language
+            }
+        })
+        .collect()
 }
 
 impl Render for ProjectsPanel {
@@ -393,5 +588,51 @@ impl Panel for ProjectsPanel {
 
     fn activation_priority(&self) -> u32 {
         4
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lists_every_language_of_a_flutter_app_and_skips_dependencies() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let write = |path: &str, contents: &str| -> anyhow::Result<()> {
+            let path = root.join(path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, contents)?;
+            Ok(())
+        };
+        write("apps/backend/iam/go.mod", "module iam")?;
+        write("apps/backend/iam/cmd/server/main.go", "")?;
+        write("apps/backend/iam/server.go", "")?;
+        write("apps/backend/iam/handler.go", "")?;
+        write("apps/mobile/pubspec.yaml", "dependencies:\n  flutter:\n    sdk: flutter\n")?;
+        write("apps/mobile/lib/main.dart", "")?;
+        write("apps/mobile/lib/app.dart", "")?;
+        write(
+            "apps/mobile/android/app/src/main/kotlin/com/example/app/MainActivity.kt",
+            "",
+        )?;
+        write("apps/mobile/ios/Runner/AppDelegate.swift", "")?;
+        write("apps/mobile/ios/Runner/GeneratedPluginRegistrant.m", "")?;
+        write("apps/mobile/ios/Pods/Library/Thing.swift", "")?;
+        write("web/node_modules/left-pad/index.rs", "")?;
+        write("web/src/app.ts", "")?;
+        write("web/eslint.config.js", "")?;
+
+        let languages = detect_languages(&[root.to_string_lossy().into_owned()]);
+        let mut names = languages.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        assert_eq!(names.first(), Some(&"Go"));
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["Flutter", "Go", "Kotlin", "Objective-C", "Swift", "TypeScript"]
+        );
+        Ok(())
     }
 }

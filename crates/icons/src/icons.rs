@@ -181,6 +181,7 @@ pub enum IconName {
     Info,
     Json,
     Keyboard,
+    Kubernetes,
     LineHeight,
     Link,
     Linux,

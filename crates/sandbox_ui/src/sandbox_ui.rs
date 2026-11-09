@@ -32,13 +32,16 @@ use workspace::{
 };
 
 mod agent_status;
+mod connections;
 mod design;
+mod kubernetes_panel;
 mod kubernetes_view;
 mod new_project_modal;
 mod projects_panel;
 mod sandbox_panel;
 mod sbx_problem;
 
+pub use kubernetes_panel::{KubernetesPanel, ToggleKubernetesPanel};
 pub use kubernetes_view::{KubernetesView, OpenKubernetes};
 pub use projects_panel::{NewProject, ProjectsPanel, ToggleProjectsPanel};
 pub use sandbox_panel::{SandboxPanel, ToggleSandboxPanel};
@@ -82,6 +85,8 @@ pub fn init(cx: &mut App) {
         });
     });
     agent_status::init(cx);
+    connections::init(cx);
+    kubernetes_panel::init(cx);
     kubernetes_view::init(cx);
     projects_panel::init(cx);
     sandbox_panel::init(cx);

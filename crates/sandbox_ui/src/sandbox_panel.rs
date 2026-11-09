@@ -3,10 +3,9 @@ use std::{future::Future, sync::Arc, time::Duration};
 use chrono::{DateTime, Utc};
 use gpui::{
     Action, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, PathPromptOptions, Pixels, SharedString, Subscription, Task, WeakEntity, actions,
+    FontWeight, Pixels, SharedString, Subscription, Task, WeakEntity, actions,
     px,
 };
-use kubernetes::{KubernetesOverview, PreparedConnection};
 use sbx::{
     ConfiguredResources, NetworkActivity, NetworkDecision, NetworkLog, PolicyRules, PublishedPort,
     SandboxInfo, SandboxProbe, SandboxStatus, Sbx, SbxError,
@@ -22,7 +21,7 @@ use workspace::{
 use crate::{
     connected_sandbox,
     design::{
-        Meter, Tone, badge, caption, icon_button, key_value, primary_button, secondary_button,
+        Meter, Tone, badge, caption, icon_button, key_value, primary_button,
         section_header, status_dot,
     },
     new_project_modal::agent_icon,
@@ -76,13 +75,6 @@ struct Snapshot {
     ports: Vec<PublishedPort>,
     network: NetworkLog,
     rules: PolicyRules,
-    kubernetes: KubernetesState,
-}
-
-enum KubernetesState {
-    NotConnected,
-    Connected(KubernetesOverview),
-    Failed(SharedString),
 }
 
 enum PanelState {
@@ -96,7 +88,6 @@ enum PanelState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PanelPage {
     Overview,
-    Kubernetes,
     Traffic,
     Settings,
 }
@@ -115,7 +106,6 @@ pub struct SandboxPanel {
     repository_url_input: Entity<InputField>,
     action_error: Option<SharedString>,
     installing_toolchains: bool,
-    connecting_kubernetes: bool,
     _refresh: Task<()>,
     _action: Task<()>,
     _problem_subscription: Option<Subscription>,
@@ -155,7 +145,6 @@ impl SandboxPanel {
                     repository_url_input,
                     action_error: None,
                     installing_toolchains: false,
-                    connecting_kubernetes: false,
                     _refresh: Task::ready(()),
                     _action: Task::ready(()),
                     _problem_subscription: None,
@@ -353,60 +342,6 @@ impl SandboxPanel {
         );
     }
 
-    fn connect_kubernetes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(name) = self.snapshot_name() else {
-            return;
-        };
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Import kubeconfig".into()),
-        });
-        self.connecting_kubernetes = true;
-        self.action_error = None;
-        cx.notify();
-        self._action = cx.spawn_in(window, async move |this, cx| {
-            let path = match paths.await {
-                Ok(Ok(paths)) => paths.and_then(|paths| paths.into_iter().next()),
-                Ok(Err(error)) => {
-                    this.update(cx, |this, cx| {
-                        this.connecting_kubernetes = false;
-                        this.action_error = Some(format!("{error:#}").into());
-                        cx.notify();
-                    })
-                    .log_err();
-                    return;
-                }
-                Err(_) => None,
-            };
-            let Some(path) = path else {
-                this.update(cx, |this, cx| {
-                    this.connecting_kubernetes = false;
-                    cx.notify();
-                })
-                .log_err();
-                return;
-            };
-            let result = cx
-                .background_spawn(async move {
-                    let connection = PreparedConnection::from_file(&path)?;
-                    let sbx = Sbx::locate()?;
-                    connection.provision(&sbx, &name).await
-                })
-                .await;
-            this.update_in(cx, |this, window, cx| {
-                this.connecting_kubernetes = false;
-                if let Err(error) = result {
-                    this.action_error = Some(format!("{error:#}").into());
-                }
-                this.schedule_refresh(window, cx);
-                cx.notify();
-            })
-            .log_err();
-        });
-    }
-
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (title, status, agent) = match &self.state {
             PanelState::Loaded(snapshot) => (
@@ -496,7 +431,6 @@ impl SandboxPanel {
         let colors = cx.theme().colors();
         let tabs = [
             (PanelPage::Overview, "Overview"),
-            (PanelPage::Kubernetes, "Kubernetes"),
             (PanelPage::Traffic, "Network"),
             (PanelPage::Settings, "Settings"),
         ];
@@ -553,7 +487,6 @@ impl SandboxPanel {
         };
         let content = match self.page {
             PanelPage::Overview => self.render_overview(snapshot, cx),
-            PanelPage::Kubernetes => self.render_kubernetes(snapshot, cx),
             PanelPage::Traffic => self.render_traffic(snapshot, cx),
             PanelPage::Settings => self.render_settings(snapshot, cx),
         };
@@ -634,83 +567,6 @@ impl SandboxPanel {
                 render_published_ports(snapshot),
                 cx,
             ))
-            .into_any_element()
-    }
-
-    fn render_kubernetes(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
-        let import_label = if self.connecting_kubernetes {
-            "Connecting…"
-        } else {
-            "Import kubeconfig"
-        };
-        let replace_label = if self.connecting_kubernetes {
-            "Connecting…"
-        } else {
-            "Replace kubeconfig"
-        };
-        let content = match &snapshot.kubernetes {
-            KubernetesState::NotConnected => v_flex()
-                .gap_2()
-                .child(muted("No Kubernetes cluster is connected to this project."))
-                .child(
-                    h_flex().child(
-                        primary_button("connect-kubernetes", import_label)
-                            .disabled(self.connecting_kubernetes)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.connect_kubernetes(window, cx)
-                            })),
-                    ),
-                )
-                .child(muted(
-                    "The active context is copied into this sandbox. Its bearer token remains on the host and is injected only into requests to the cluster API.",
-                ))
-                .into_any_element(),
-            KubernetesState::Failed(error) => v_flex()
-                .gap_2()
-                .child(
-                    Label::new(error.clone())
-                        .size(LabelSize::Small)
-                        .color(Color::Error),
-                )
-                .child(
-                    h_flex().child(
-                        secondary_button("replace-kubernetes", replace_label)
-                            .disabled(self.connecting_kubernetes)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.connect_kubernetes(window, cx)
-                            })),
-                    ),
-                )
-                .into_any_element(),
-            KubernetesState::Connected(overview) => v_flex()
-                .gap_3()
-                .child(render_kubernetes_summary(overview, cx))
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(primary_button("open-kubernetes", "Open Kubernetes").on_click(
-                            |_, window, cx| {
-                                window.dispatch_action(
-                                    crate::kubernetes_view::OpenKubernetes.boxed_clone(),
-                                    cx,
-                                )
-                            },
-                        ))
-                        .child(
-                            secondary_button("replace-kubernetes", replace_label)
-                                .disabled(self.connecting_kubernetes)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.connect_kubernetes(window, cx)
-                                })),
-                        ),
-                )
-                .child(caption(
-                    "kubectl and helm are available to this project's terminals and agents.",
-                ))
-                .into_any_element(),
-        };
-        v_flex()
-            .child(section("Cluster", IconName::Blocks, content, cx))
             .into_any_element()
     }
 
@@ -1096,7 +952,7 @@ async fn load_snapshot(name: String) -> anyhow::Result<Snapshot> {
     let configured = sbx::configured_resources(&name);
     let running = info.status == SandboxStatus::Running;
     // Probing runs a command in the sandbox, which would start a stopped one.
-    let (probe, ports, network, rules, kubernetes) = futures::join!(
+    let (probe, ports, network, rules) = futures::join!(
         async {
             if running {
                 sbx.probe(&name).await.map(Some)
@@ -1113,13 +969,6 @@ async fn load_snapshot(name: String) -> anyhow::Result<Snapshot> {
         },
         sbx.network_log(&name, NETWORK_LOG_LIMIT),
         sbx.policy_rules(&name),
-        async {
-            if running {
-                kubernetes::probe(&sbx, &name).await
-            } else {
-                Ok(None)
-            }
-        },
     );
     let mut probe = probe?;
     if let Some(found) = &probe
@@ -1136,11 +985,6 @@ async fn load_snapshot(name: String) -> anyhow::Result<Snapshot> {
             probe = sbx.probe(&name).await.log_err().or(probe);
         }
     }
-    let kubernetes = match kubernetes {
-        Ok(Some(overview)) => KubernetesState::Connected(overview),
-        Ok(None) => KubernetesState::NotConnected,
-        Err(error) => KubernetesState::Failed(format!("{error:#}").into()),
-    };
     Ok(Snapshot {
         info,
         configured,
@@ -1148,42 +992,7 @@ async fn load_snapshot(name: String) -> anyhow::Result<Snapshot> {
         ports: ports?,
         network: network.log_err().unwrap_or_default(),
         rules: rules.log_err().unwrap_or_default(),
-        kubernetes,
     })
-}
-
-fn render_kubernetes_summary(overview: &KubernetesOverview, cx: &App) -> impl IntoElement {
-    let nodes = match overview.total_nodes {
-        Some(total) => format!("{}/{total} ready", overview.ready_nodes),
-        None => "—".to_string(),
-    };
-    let pods = match overview.total_pods {
-        Some(total) => format!("{}/{total} running", overview.running_pods),
-        None => "—".to_string(),
-    };
-    let healthy = overview
-        .total_nodes
-        .is_none_or(|total| total == overview.ready_nodes);
-    v_flex()
-        .gap_1()
-        .child(
-            h_flex()
-                .gap_2()
-                .child(status_dot(if healthy { Tone::Ok } else { Tone::Error }, cx))
-                .child(
-                    Label::new(overview.context.clone())
-                        .size(LabelSize::Small)
-                        .weight(FontWeight::MEDIUM)
-                        .truncate(),
-                ),
-        )
-        .child(caption(format!("{} · {}", overview.server, overview.version)).truncate())
-        .child(key_value("Nodes", Label::new(nodes).size(LabelSize::Small)))
-        .child(key_value("Pods", Label::new(pods).size(LabelSize::Small)))
-        .child(key_value(
-            "Namespace",
-            Label::new(overview.namespace.clone()).size(LabelSize::Small),
-        ))
 }
 
 fn render_resources(snapshot: &Snapshot, _cx: &App) -> impl IntoElement {

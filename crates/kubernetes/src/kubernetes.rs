@@ -19,7 +19,7 @@ mod resources;
 mod table;
 
 pub use cluster::{
-    Cluster, ContextInfo, HelmRelease, Listing, MANIFEST_DIRECTORY, Revision, Usage, shell_quote,
+    Cluster, ClusterStatus, ContextInfo, HelmRelease, Listing, MANIFEST_DIRECTORY, Revision, Usage, shell_quote,
 };
 pub use details::{
     Condition, ContainerInfo, DataEntry, Details, EventRow, KeyValue, Section, ServicePort,
@@ -96,7 +96,7 @@ pub struct KubernetesOverview {
     pub total_pods: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Kubeconfig {
     #[serde(default = "api_version")]
@@ -194,27 +194,86 @@ fn config_kind() -> String {
     "Config".to_string()
 }
 
+/// A context of a kubeconfig file on the host, and why Sands cannot connect it, if it cannot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KubeconfigEntry {
+    pub context: String,
+    pub server: String,
+    pub namespace: String,
+    pub current: bool,
+    pub problem: Option<String>,
+}
+
+/// Lists the contexts of a kubeconfig file so the user can pick which ones to connect.
+pub fn read_kubeconfig_contexts(path: &Path) -> Result<Vec<KubeconfigEntry>> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("failed to read kubeconfig {}", path.display()))?;
+    let base_directory = path.parent().unwrap_or_else(|| Path::new("."));
+    kubeconfig_contexts(&contents, base_directory)
+}
+
+fn kubeconfig_contexts(contents: &str, base_directory: &Path) -> Result<Vec<KubeconfigEntry>> {
+    let config: Kubeconfig =
+        serde_yaml::from_str(contents).context("the kubeconfig is not valid YAML")?;
+    if config.contexts.is_empty() {
+        bail!("the kubeconfig contains no contexts");
+    }
+    Ok(config
+        .contexts
+        .iter()
+        .map(|context| KubeconfigEntry {
+            context: context.name.clone(),
+            server: config
+                .clusters
+                .iter()
+                .find(|cluster| cluster.name == context.context.cluster)
+                .map(|cluster| cluster.cluster.server.clone())
+                .unwrap_or_default(),
+            namespace: context
+                .context
+                .namespace
+                .clone()
+                .unwrap_or_else(|| "default".to_string()),
+            current: context.name == config.current_context,
+            problem: PreparedConnection::from_config(&config, base_directory, Some(&context.name))
+                .err()
+                .map(|error| format!("{error:#}")),
+        })
+        .collect())
+}
+
 impl PreparedConnection {
-    pub fn from_file(path: &Path) -> Result<Self> {
+    pub fn from_file(path: &Path, context: &str) -> Result<Self> {
         let contents = fs::read_to_string(path)
             .with_context(|| format!("failed to read kubeconfig {}", path.display()))?;
         let base_directory = path.parent().unwrap_or_else(|| Path::new("."));
-        Self::from_yaml(&contents, base_directory)
+        let config: Kubeconfig =
+            serde_yaml::from_str(&contents).context("the kubeconfig is not valid YAML")?;
+        Self::from_config(&config, base_directory, Some(context))
     }
 
     pub fn from_yaml(contents: &str, base_directory: &Path) -> Result<Self> {
         let config: Kubeconfig =
             serde_yaml::from_str(contents).context("the kubeconfig is not valid YAML")?;
-        let context_name = if config.current_context.is_empty() {
-            match config.contexts.as_slice() {
+        Self::from_config(&config, base_directory, None)
+    }
+
+    /// Prepares one context of `config`; without a requested context, the current one.
+    fn from_config(
+        config: &Kubeconfig,
+        base_directory: &Path,
+        requested_context: Option<&str>,
+    ) -> Result<Self> {
+        let context_name = match requested_context {
+            Some(context) => context.to_string(),
+            None if config.current_context.is_empty() => match config.contexts.as_slice() {
                 [context] => context.name.clone(),
                 [] => bail!("the kubeconfig contains no contexts"),
                 _ => bail!("the kubeconfig has no current-context; select one before importing"),
-            }
-        } else {
-            config.current_context.clone()
+            },
+            None => config.current_context.clone(),
         };
-        let context = config
+        let mut context = config
             .contexts
             .iter()
             .find(|context| context.name == context_name)
@@ -264,8 +323,14 @@ impl PreparedConnection {
         } else {
             format!("{host}:{port}")
         };
-        let placeholder = format!("sands-k8s-{context_name}");
+        let placeholder = placeholder_for(&context_name);
         user.user.token = Some(placeholder.clone());
+        // Contexts from different files often share cluster and user names ("default",
+        // "kind-kind"); naming both after the context keeps the merged sandbox kubeconfig apart.
+        cluster.name = context_name.clone();
+        user.name = context_name.clone();
+        context.context.cluster = context_name.clone();
+        context.context.user = context_name.clone();
 
         let namespace = context
             .context
@@ -273,9 +338,9 @@ impl PreparedConnection {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let sanitized = Kubeconfig {
-            api_version: config.api_version,
-            kind: config.kind,
-            preferences: config.preferences,
+            api_version: config.api_version.clone(),
+            kind: config.kind.clone(),
+            preferences: config.preferences.clone(),
             clusters: vec![cluster],
             users: vec![user],
             contexts: vec![context],
@@ -295,8 +360,13 @@ impl PreparedConnection {
         })
     }
 
+    /// Adds this context to the sandbox kubeconfig, next to the clusters already connected, and
+    /// makes it the current one. The token stays on the host; the sbx proxy substitutes it.
     pub async fn provision(&self, sbx: &Sbx, sandbox_name: &str) -> Result<()> {
-        let previous_placeholder = current_placeholder(sbx, sandbox_name).await?;
+        let existing = read_sandbox_kubeconfig(sbx, sandbox_name).await?;
+        let previous_placeholder = existing
+            .as_ref()
+            .and_then(|config| user_token_for_context(config, &self.context));
         let network_rules = sbx.policy_rules(sandbox_name).await?;
         let network_is_allowed = network_rules.rules.iter().any(|rule| {
             rule.decision == "allow"
@@ -307,19 +377,14 @@ impl PreparedConnection {
             sbx.add_network_rule(sandbox_name, NetworkDecision::Allow, &self.network_resource)
                 .await?;
         }
-        let token_file = store_token(sandbox_name, &self.token)?;
+        let token_file = store_token(sandbox_name, &self.context, &self.token)?;
         sbx.set_custom_secret_from_file(sandbox_name, &self.host, &self.placeholder, &token_file)
             .await?;
 
-        let mut file = NamedTempFile::new().context("failed to create a temporary kubeconfig")?;
-        file.write_all(self.kubeconfig.as_bytes())
-            .context("failed to write the temporary kubeconfig")?;
-        file.flush()
-            .context("failed to flush the temporary kubeconfig")?;
-        sbx.exec(sandbox_name, &["mkdir", "-p", "/home/agent/.kube"])
-            .await?;
-        sbx.copy_to(sandbox_name, file.path(), SANDBOX_KUBECONFIG)
-            .await?;
+        let addition: Kubeconfig = serde_yaml::from_str(&self.kubeconfig)
+            .context("the prepared kubeconfig is not valid YAML")?;
+        let merged = merge_kubeconfig(existing, addition);
+        write_sandbox_kubeconfig(sbx, sandbox_name, &merged).await?;
         let output = sbx
             .exec(sandbox_name, &["bash", "-lc", KUBECTL_INSTALL_SCRIPT])
             .await?;
@@ -337,6 +402,7 @@ impl PreparedConnection {
             .context("the Kubernetes connection was not created")?;
         if let Some(previous_placeholder) = previous_placeholder
             && previous_placeholder != self.placeholder
+            && !placeholder_in_use(&merged, &previous_placeholder)
         {
             sbx.remove_custom_secret(sandbox_name, &previous_placeholder)
                 .await?;
@@ -345,16 +411,169 @@ impl PreparedConnection {
     }
 }
 
-fn store_token(sandbox_name: &str, token: &str) -> Result<PathBuf> {
-    store_token_in(
-        &paths::data_dir().join("secrets").join("kubernetes"),
-        sandbox_name,
-        token,
-    )
+/// Removes one context from the sandbox kubeconfig together with the token secret behind it.
+/// If it was the current context, another connected one becomes current.
+pub async fn disconnect_context(sbx: &Sbx, sandbox_name: &str, context: &str) -> Result<()> {
+    let Some(mut config) = read_sandbox_kubeconfig(sbx, sandbox_name).await? else {
+        return Ok(());
+    };
+    let placeholder = user_token_for_context(&config, context);
+    remove_context(&mut config, context);
+    write_sandbox_kubeconfig(sbx, sandbox_name, &config).await?;
+    if let Some(placeholder) = placeholder
+        && !placeholder_in_use(&config, &placeholder)
+    {
+        sbx.remove_custom_secret(sandbox_name, &placeholder).await?;
+    }
+    remove_stored_token(sandbox_name, context)?;
+    Ok(())
 }
 
-fn store_token_in(root: &Path, sandbox_name: &str, token: &str) -> Result<PathBuf> {
-    let sandbox_directory = root.join(URL_SAFE_NO_PAD.encode(sandbox_name.as_bytes()));
+fn placeholder_for(context: &str) -> String {
+    let sanitized = context
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    format!("sands-k8s-{sanitized}")
+}
+
+async fn read_sandbox_kubeconfig(sbx: &Sbx, sandbox_name: &str) -> Result<Option<Kubeconfig>> {
+    let output = sbx
+        .exec(sandbox_name, &["cat", SANDBOX_KUBECONFIG])
+        .await?;
+    if !output.status.success() || output.stdout.iter().all(u8::is_ascii_whitespace) {
+        return Ok(None);
+    }
+    let config: Kubeconfig = serde_yaml::from_slice(&output.stdout)
+        .context("the project kubeconfig in the sandbox is not valid YAML")?;
+    Ok(Some(config))
+}
+
+async fn write_sandbox_kubeconfig(sbx: &Sbx, sandbox_name: &str, config: &Kubeconfig) -> Result<()> {
+    let contents =
+        serde_yaml::to_string(config).context("failed to serialize the project kubeconfig")?;
+    let mut file = NamedTempFile::new().context("failed to create a temporary kubeconfig")?;
+    file.write_all(contents.as_bytes())
+        .context("failed to write the temporary kubeconfig")?;
+    file.flush()
+        .context("failed to flush the temporary kubeconfig")?;
+    sbx.exec(sandbox_name, &["mkdir", "-p", "/home/agent/.kube"])
+        .await?;
+    sbx.copy_to(sandbox_name, file.path(), SANDBOX_KUBECONFIG)
+        .await?;
+    Ok(())
+}
+
+/// The token placeholder of the user behind `context`, when Sands created it.
+fn user_token_for_context(config: &Kubeconfig, context: &str) -> Option<String> {
+    let user = &config
+        .contexts
+        .iter()
+        .find(|candidate| candidate.name == context)?
+        .context
+        .user;
+    config
+        .users
+        .iter()
+        .find(|candidate| &candidate.name == user)?
+        .user
+        .token
+        .clone()
+        .filter(|token| token.starts_with("sands-k8s-"))
+}
+
+fn placeholder_in_use(config: &Kubeconfig, placeholder: &str) -> bool {
+    config
+        .users
+        .iter()
+        .any(|user| user.user.token.as_deref() == Some(placeholder))
+}
+
+fn merge_kubeconfig(existing: Option<Kubeconfig>, addition: Kubeconfig) -> Kubeconfig {
+    let Some(mut merged) = existing else {
+        return addition;
+    };
+    for cluster in addition.clusters {
+        merged
+            .clusters
+            .retain(|candidate| candidate.name != cluster.name);
+        merged.clusters.push(cluster);
+    }
+    for user in addition.users {
+        merged.users.retain(|candidate| candidate.name != user.name);
+        merged.users.push(user);
+    }
+    for context in addition.contexts {
+        merged
+            .contexts
+            .retain(|candidate| candidate.name != context.name);
+        merged.contexts.push(context);
+    }
+    merged.current_context = addition.current_context;
+    prune_unreferenced(&mut merged);
+    merged
+}
+
+fn remove_context(config: &mut Kubeconfig, context: &str) {
+    config.contexts.retain(|candidate| candidate.name != context);
+    if config.current_context == context {
+        config.current_context = config
+            .contexts
+            .first()
+            .map(|context| context.name.clone())
+            .unwrap_or_default();
+    }
+    prune_unreferenced(config);
+}
+
+/// Drops clusters and users no context refers to, such as those of a replaced import.
+fn prune_unreferenced(config: &mut Kubeconfig) {
+    let contexts = &config.contexts;
+    config.clusters.retain(|cluster| {
+        contexts
+            .iter()
+            .any(|context| context.context.cluster == cluster.name)
+    });
+    config
+        .users
+        .retain(|user| contexts.iter().any(|context| context.context.user == user.name));
+}
+
+fn token_root() -> PathBuf {
+    paths::data_dir().join("secrets").join("kubernetes")
+}
+
+fn store_token(sandbox_name: &str, context: &str, token: &str) -> Result<PathBuf> {
+    store_token_in(&token_root(), sandbox_name, context, token)
+}
+
+fn remove_stored_token(sandbox_name: &str, context: &str) -> Result<()> {
+    let path = token_path_in(&token_root(), sandbox_name, context);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to remove Kubernetes token {}", path.display())),
+    }
+}
+
+fn token_path_in(root: &Path, sandbox_name: &str, context: &str) -> PathBuf {
+    root.join(URL_SAFE_NO_PAD.encode(sandbox_name.as_bytes()))
+        .join(format!("{}.token", URL_SAFE_NO_PAD.encode(context.as_bytes())))
+}
+
+fn store_token_in(root: &Path, sandbox_name: &str, context: &str, token: &str) -> Result<PathBuf> {
+    let token_path = token_path_in(root, sandbox_name, context);
+    let sandbox_directory = token_path
+        .parent()
+        .context("the Kubernetes token path has no directory")?
+        .to_path_buf();
     fs::create_dir_all(&sandbox_directory).with_context(|| {
         format!(
             "failed to create Kubernetes secret directory {}",
@@ -375,7 +594,6 @@ fn store_token_in(root: &Path, sandbox_name: &str, token: &str) -> Result<PathBu
         )?;
     }
 
-    let token_path = sandbox_directory.join("token");
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -416,27 +634,6 @@ fn store_token_in(root: &Path, sandbox_name: &str, token: &str) -> Result<PathBu
             })?;
     }
     Ok(token_path)
-}
-
-async fn current_placeholder(sbx: &Sbx, sandbox_name: &str) -> Result<Option<String>> {
-    let output = sbx
-        .exec(
-            sandbox_name,
-            &[
-                "kubectl", "config", "view", "--minify", "--raw", "-o", "json",
-            ],
-        )
-        .await?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let configuration: JsonValue = serde_json::from_slice(&output.stdout)
-        .context("the existing project kubeconfig is not valid JSON")?;
-    Ok(configuration
-        .pointer("/users/0/user/token")
-        .and_then(JsonValue::as_str)
-        .filter(|token| token.starts_with("sands-k8s-"))
-        .map(str::to_string))
 }
 
 fn inline_certificate_authority(
@@ -635,13 +832,15 @@ current-context: context
     #[test]
     fn stores_tokens_outside_sandbox_named_paths() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let token_path = store_token_in(directory.path(), "../../project name", "secret-token")?;
+        let token_path = store_token_in(
+            directory.path(),
+            "../../project name",
+            "../context",
+            "secret-token",
+        )?;
 
         assert!(token_path.starts_with(directory.path()));
-        assert_eq!(
-            token_path.file_name().and_then(|name| name.to_str()),
-            Some("token")
-        );
+        assert_eq!(token_path.parent().map(Path::parent), Some(Some(directory.path())));
         assert_eq!(fs::read_to_string(&token_path)?, "secret-token");
         #[cfg(unix)]
         {
@@ -672,6 +871,94 @@ current-context: context
         let error = PreparedConnection::from_yaml(yaml, Path::new("/tmp"))
             .expect_err("client keys must not be copied into the sandbox");
         assert!(error.to_string().contains("service-account token"));
+    }
+
+    const TWO_CONTEXTS: &str = r#"
+clusters:
+  - name: shared
+    cluster: { server: https://dev.example.com }
+  - name: other
+    cluster: { server: https://127.0.0.1:6443 }
+users:
+  - name: shared
+    user: { token: dev-token }
+  - name: other
+    user: { token: local-token }
+contexts:
+  - name: dev
+    context: { cluster: shared, user: shared, namespace: apps }
+  - name: local
+    context: { cluster: other, user: other }
+current-context: local
+"#;
+
+    #[test]
+    fn lists_contexts_and_why_some_cannot_connect() -> Result<()> {
+        let entries = kubeconfig_contexts(TWO_CONTEXTS, Path::new("/tmp"))?;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].context, "dev");
+        assert_eq!(entries[0].server, "https://dev.example.com");
+        assert_eq!(entries[0].namespace, "apps");
+        assert!(!entries[0].current);
+        assert_eq!(entries[0].problem, None);
+        assert!(entries[1].current);
+        assert!(entries[1].problem.as_deref().is_some_and(|problem| problem.contains("loopback")));
+        Ok(())
+    }
+
+    #[test]
+    fn merges_contexts_and_replaces_reimported_ones() -> Result<()> {
+        let config: Kubeconfig = serde_yaml::from_str(TWO_CONTEXTS)?;
+        let dev = PreparedConnection::from_config(&config, Path::new("/tmp"), Some("dev"))?;
+        let dev: Kubeconfig = serde_yaml::from_str(&dev.kubeconfig)?;
+        assert_eq!(dev.clusters[0].name, "dev");
+        assert_eq!(dev.users[0].name, "dev");
+
+        let staging = PreparedConnection::from_yaml(
+            r#"
+clusters: [{ name: shared, cluster: { server: "https://staging.example.com" } }]
+users: [{ name: shared, user: { token: staging-token } }]
+contexts: [{ name: staging, context: { cluster: shared, user: shared } }]
+current-context: staging
+"#,
+            Path::new("/tmp"),
+        )?;
+        let staging: Kubeconfig = serde_yaml::from_str(&staging.kubeconfig)?;
+
+        let mut merged = merge_kubeconfig(Some(dev.clone()), staging);
+        assert_eq!(merged.current_context, "staging");
+        let names = |config: &Kubeconfig| {
+            config
+                .contexts
+                .iter()
+                .map(|context| context.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&merged), ["dev", "staging"]);
+        assert_eq!(merged.clusters.len(), 2);
+        assert_eq!(
+            user_token_for_context(&merged, "staging").as_deref(),
+            Some("sands-k8s-staging")
+        );
+
+        merged = merge_kubeconfig(Some(merged), dev);
+        assert_eq!(names(&merged), ["staging", "dev"]);
+        assert_eq!(merged.users.len(), 2);
+
+        remove_context(&mut merged, "dev");
+        assert_eq!(names(&merged), ["staging"]);
+        assert_eq!(merged.current_context, "staging");
+        assert_eq!(merged.clusters.len(), 1);
+        assert!(!placeholder_in_use(&merged, "sands-k8s-dev"));
+        Ok(())
+    }
+
+    #[test]
+    fn placeholders_only_use_header_safe_characters() {
+        assert_eq!(
+            placeholder_for("arn:aws:eks:eu-west-1:123:cluster/prod"),
+            "sands-k8s-arn-aws-eks-eu-west-1-123-cluster-prod"
+        );
     }
 
     #[test]
