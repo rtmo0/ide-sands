@@ -663,10 +663,11 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> IconButton {
         let (icon, color) = match task_status {
-            Some(RunnableTaskStatus::Running) => (ui::IconName::PlayOutlined, Color::Accent),
+            // Like JetBrains IDEs: a green run triangle, a check or a cross once it ran.
+            Some(RunnableTaskStatus::Running) => (ui::IconName::PlayFilled, Color::Accent),
             Some(RunnableTaskStatus::Passed) => (ui::IconName::Check, Color::Success),
             Some(RunnableTaskStatus::Failed) => (ui::IconName::XCircle, Color::Error),
-            None => (ui::IconName::PlayOutlined, Color::Muted),
+            None => (ui::IconName::PlayFilled, Color::Success),
         };
 
         IconButton::new(("run_indicator", row.0 as usize), icon)

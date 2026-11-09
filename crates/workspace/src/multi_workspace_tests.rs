@@ -47,6 +47,7 @@ fn setup_multi_workspace<'a>(
 }
 
 #[gpui::test]
+#[ignore = "Sands never shows the threads sidebar"]
 async fn test_sidebar_disabled_when_disable_ai_is_enabled(cx: &mut TestAppContext) {
     init_test(cx);
     let fs = FakeFs::new(cx.executor());
@@ -317,6 +318,7 @@ async fn test_open_new_window_does_not_open_sidebar_on_existing_window(cx: &mut 
 }
 
 #[gpui::test]
+#[ignore = "Sands never shows the threads sidebar"]
 async fn test_open_directory_in_existing_window_opens_sidebar(cx: &mut TestAppContext) {
     init_test(cx);
 

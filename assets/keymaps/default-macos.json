@@ -759,7 +759,6 @@
       "cmd-shift-p": "command_palette::Toggle",
       "cmd-shift-m": "diagnostics::Deploy",
       "cmd-shift-e": "project_panel::ToggleFocus",
-      "cmd-shift-b": "outline_panel::ToggleFocus",
       "ctrl-shift-g": "git_panel::ToggleFocus",
       "cmd-shift-d": "debug_panel::ToggleFocus",
       "cmd-?": "agent::ToggleFocus",

@@ -13289,7 +13289,7 @@ mod tests {
             });
         });
         cx.executor().run_until_parked();
-        assert_eq!(cx.window_title().as_deref(), Some("Zed — root1, root2"));
+        assert_eq!(cx.window_title().as_deref(), Some("Sands — root1, root2"));
 
         let item = cx.new(|cx| {
             TestItem::new(cx).with_project_items(&[TestProjectItem::new_in_worktree(
@@ -13306,7 +13306,7 @@ mod tests {
         let expected_file_path = path!("/root1/src/one.txt");
         assert_eq!(
             cx.window_title().as_deref(),
-            Some(format!("Zed — root1, root2 — one — {expected_file_path}").as_str())
+            Some(format!("Sands — root1, root2 — one — {expected_file_path}").as_str())
         );
     }
 
@@ -19609,7 +19609,7 @@ mod tests {
         workspace.update_in(cx, |_workspace, _window, cx| {
             *SystemAppearance::global_mut(cx) = SystemAppearance(theme::Appearance::Light);
             settings::update_settings_file(settings_fs.clone(), cx, |settings, _cx| {
-                settings.theme.theme = Some(ThemeSelection::Static(ThemeName("One Light".into())));
+                settings.theme.theme = Some(ThemeSelection::Static(ThemeName("Sands Light".into())));
             });
         });
         cx.executor().advance_clock(Duration::from_millis(200));
@@ -19618,7 +19618,7 @@ mod tests {
         // Confirm the initial persisted settings contain the static theme
         // we just wrote before any toggling happens.
         let settings_text = SettingsStore::load_settings(&settings_fs).await.unwrap();
-        assert!(settings_text.contains(r#""theme": "One Light""#));
+        assert!(settings_text.contains(r#""theme": "Sands Light""#));
 
         // Toggle once. This should migrate the persisted theme settings
         // into light/dark slots and enable system mode.
@@ -19636,8 +19636,8 @@ mod tests {
             parsed["theme"],
             serde_json::json!({
                 "mode": "system",
-                "light": "One Light",
-                "dark": "One Dark"
+                "light": "Sands Light",
+                "dark": "Sands Dark"
             })
         );
 

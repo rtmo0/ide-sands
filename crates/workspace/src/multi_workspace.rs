@@ -503,8 +503,10 @@ impl MultiWorkspace {
     }
 
     fn apply_open_sidebar(&mut self, cx: &mut Context<Self>) {
-        // Sands lists projects in its Projects panel and does not show the threads sidebar.
+        // Sands lists projects in its Projects panel and does not show the threads sidebar, but
+        // the active project is still kept open across switches, as opening the sidebar does.
         if SANDS_HIDES_THREADS_SIDEBAR {
+            self.retain_active_workspace(cx);
             return;
         }
         self.sidebar_open = true;

@@ -62,6 +62,9 @@
         "hcl": {
           "path": "icons/hcl_dark.svg"
         },
+        "html": {
+          "path": "icons/html_dark.svg"
+        },
         "image": {
           "path": "icons/image_dark.svg"
         },
@@ -71,11 +74,17 @@
         "javascript": {
           "path": "icons/javaScript_dark.svg"
         },
+        "json": {
+          "path": "icons/json_dark.svg"
+        },
         "kotlin": {
           "path": "icons/kotlin_dark.svg"
         },
         "lua": {
           "path": "icons/lua.svg"
+        },
+        "markdown": {
+          "path": "icons/markdown_dark.svg"
         },
         "php": {
           "path": "icons/php_dark.svg"
@@ -101,6 +110,9 @@
         "swift": {
           "path": "icons/swift.svg"
         },
+        "template": {
+          "path": "icons/xml_dark.svg"
+        },
         "terminal": {
           "path": "icons/shell_dark.svg"
         },
@@ -118,6 +130,9 @@
         },
         "vue": {
           "path": "icons/vueJs.svg"
+        },
+        "yaml": {
+          "path": "icons/yaml_dark.svg"
         },
         "zig": {
           "path": "icons/zig_dark.svg"
@@ -183,6 +198,9 @@
         "hcl": {
           "path": "icons/hcl.svg"
         },
+        "html": {
+          "path": "icons/html_dark.svg"
+        },
         "image": {
           "path": "icons/image.svg"
         },
@@ -192,11 +210,17 @@
         "javascript": {
           "path": "icons/javaScript.svg"
         },
+        "json": {
+          "path": "icons/json_dark.svg"
+        },
         "kotlin": {
           "path": "icons/kotlin.svg"
         },
         "lua": {
           "path": "icons/lua.svg"
+        },
+        "markdown": {
+          "path": "icons/markdown_dark.svg"
         },
         "php": {
           "path": "icons/php.svg"
@@ -222,6 +246,9 @@
         "swift": {
           "path": "icons/swift.svg"
         },
+        "template": {
+          "path": "icons/xml_dark.svg"
+        },
         "terminal": {
           "path": "icons/shell.svg"
         },
@@ -239,6 +266,9 @@
         },
         "vue": {
           "path": "icons/vueJs.svg"
+        },
+        "yaml": {
+          "path": "icons/yaml_dark.svg"
         },
         "zig": {
           "path": "icons/zig.svg"

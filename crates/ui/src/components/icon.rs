@@ -142,6 +142,9 @@ enum IconSource {
     External(Arc<Path>),
     /// An SVG not embedded in the Zed binary.
     ExternalSvg(SharedString),
+    /// A colored icon embedded in the binary, such as those of the bundled icon themes. Like
+    /// [`IconSource::External`], it renders as an image so it keeps its colors.
+    EmbeddedImage(SharedString),
 }
 
 #[derive(Clone, IntoElement, RegisterComponent)]
@@ -169,7 +172,9 @@ impl Icon {
     /// - Other paths are treated as external raster images (from icon themes)
     pub fn from_path(path: impl Into<SharedString>) -> Self {
         let path = path.into();
-        let source = if path.starts_with("icons/") {
+        let source = if path.starts_with("icons/icon_themes/") {
+            IconSource::EmbeddedImage(path)
+        } else if path.starts_with("icons/") {
             IconSource::Embedded(path)
         } else {
             IconSource::External(Arc::from(PathBuf::from(path.as_ref())))
@@ -245,6 +250,12 @@ impl RenderOnce for Icon {
                     .size(self.size)
                     .flex_none()
                     .text_color(color)
+                    .into_any_element();
+            }
+            IconSource::EmbeddedImage(path) => {
+                return img(path)
+                    .size(self.size)
+                    .flex_none()
                     .into_any_element();
             }
         };

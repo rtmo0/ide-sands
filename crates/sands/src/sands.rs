@@ -56,7 +56,6 @@ use migrate::{MigrationBanner, MigrationEvent, MigrationNotification, MigrationT
 use migrator::migrate_keymap;
 use onboarding::multibuffer_hint::MultibufferHint;
 pub use open_listener::*;
-use outline_panel::OutlinePanel;
 use paths::{
     local_debug_file_relative_path, local_settings_file_relative_path,
     local_tasks_file_relative_path,
@@ -778,7 +777,6 @@ fn show_software_emulation_warning_if_needed(
 fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<anyhow::Result<()>> {
     cx.spawn_in(window, async move |workspace_handle, cx| {
         let project_panel = ProjectPanel::load(workspace_handle.clone(), cx.clone());
-        let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
         let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
@@ -802,7 +800,6 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
 
         futures::join!(
             add_panel_when_ready(project_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
@@ -1307,14 +1304,6 @@ fn register_actions(
              window: &mut Window,
              cx: &mut Context<Workspace>| {
                 workspace.toggle_panel_focus::<ProjectPanel>(window, cx);
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &outline_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<OutlinePanel>(window, cx);
             },
         )
         .register_action(
@@ -3264,7 +3253,7 @@ mod tests {
         multi_workspace_1
             .update(cx, |multi_workspace, _window, cx| {
                 assert_eq!(multi_workspace.workspaces().count(), 2);
-                assert!(multi_workspace.sidebar_open());
+                assert!(!multi_workspace.sidebar_open());
                 let workspace = multi_workspace.workspace().read(cx);
                 assert_eq!(
                     workspace
@@ -5145,7 +5134,7 @@ mod tests {
             .unwrap();
         let cx = &mut VisualTestContext::from_window(*window, cx);
 
-        let mouse_position = point(px(250.), px(250.));
+        let mouse_position = point(px(800.), px(400.));
 
         let event_modifiers = {
             #[cfg(target_os = "macos")]
@@ -6248,6 +6237,7 @@ mod tests {
                 "inline_assistant",
                 "journal",
                 "keymap_editor",
+                "kubernetes",
                 "keystroke_input",
                 "language_selector",
                 "welcome",
@@ -6297,6 +6287,7 @@ mod tests {
                 "worktree_picker",
                 "zed",
                 "zed_actions",
+                "sands",
                 "zed_predict_onboarding",
                 "zeta",
             ];
@@ -6333,7 +6324,7 @@ mod tests {
         for theme_name in themes.list().into_iter().map(|meta| meta.name) {
             let theme = themes.get(&theme_name).unwrap();
             assert_eq!(theme.name, theme_name);
-            if theme.name.as_ref() == "One Dark" {
+            if theme.name.as_ref() == theme::DEFAULT_DARK_THEME {
                 has_default_theme = true;
             }
         }
@@ -8480,12 +8471,12 @@ mod tests {
         cx.update(|cx| reload_keymaps(cx, Vec::new()));
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
-                "expected Agent Panel in the View menu when AI is enabled"
+                has_view_item(cx, "Agent"),
+                "expected Agent in the View menu when AI is enabled"
             );
             assert!(
-                has_view_item(cx, "Diagnostics"),
-                "expected Diagnostics to be in View menu"
+                has_view_item(cx, "Terminal"),
+                "expected Terminal to be in View menu"
             );
         });
 
@@ -8501,12 +8492,12 @@ mod tests {
         });
         cx.update(|cx| {
             assert!(
-                !has_view_item(cx, "Agent Panel"),
-                "expected Agent Panel to be removed from the View menu after disabling AI"
+                !has_view_item(cx, "Agent"),
+                "expected Agent to be removed from the View menu after disabling AI"
             );
             assert!(
-                has_view_item(cx, "Diagnostics"),
-                "expected Diagnostics to remain in the View menu"
+                has_view_item(cx, "Terminal"),
+                "expected Terminal to remain in the View menu"
             );
         });
 
@@ -8520,12 +8511,12 @@ mod tests {
         cx.update(|cx| reload_keymaps(cx, Vec::new()));
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
-                "expected Agent Panel back in the View menu after re-enabling AI"
+                has_view_item(cx, "Agent"),
+                "expected Agent back in the View menu after re-enabling AI"
             );
             assert!(
-                has_view_item(cx, "Diagnostics"),
-                "expected Diagnostics to remain in the View menu"
+                has_view_item(cx, "Terminal"),
+                "expected Terminal to remain in the View menu"
             );
         });
     }
@@ -8537,12 +8528,12 @@ mod tests {
         cx.update(|cx| reload_keymaps(cx, Vec::new()));
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
-                "expected Agent Panel before disabling AI"
+                has_view_item(cx, "Agent"),
+                "expected Agent before disabling AI"
             );
             assert!(
-                has_view_item(cx, "Diagnostics"),
-                "expected Diagnostics in the View menu"
+                has_view_item(cx, "Terminal"),
+                "expected Terminal in the View menu"
             );
         });
 
@@ -8582,12 +8573,12 @@ mod tests {
 
         cx.update(|cx| {
             assert!(
-                !has_view_item(cx, "Agent Panel"),
-                "expected Agent Panel removed even though the keymap file is malformed"
+                !has_view_item(cx, "Agent"),
+                "expected Agent removed even though the keymap file is malformed"
             );
             assert!(
-                has_view_item(cx, "Diagnostics"),
-                "expected Diagnostics to remain in the View menu"
+                has_view_item(cx, "Terminal"),
+                "expected Terminal to remain in the View menu"
             );
         });
 
@@ -8604,12 +8595,12 @@ mod tests {
 
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
-                "expected Agent Panel added back even though the keymap file is malformed"
+                has_view_item(cx, "Agent"),
+                "expected Agent added back even though the keymap file is malformed"
             );
             assert!(
-                has_view_item(cx, "Diagnostics"),
-                "expected Diagnostics to remain in the View menu"
+                has_view_item(cx, "Terminal"),
+                "expected Terminal to remain in the View menu"
             );
         });
     }
