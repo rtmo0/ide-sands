@@ -47,7 +47,7 @@ pub use crate::theme_settings_provider::*;
 pub use crate::ui_density::*;
 
 /// The name of the default dark theme.
-pub const DEFAULT_DARK_THEME: &str = "One Dark";
+pub const DEFAULT_DARK_THEME: &str = "Sands Dark";
 
 /// Defines window border radius for platforms that use client side decorations.
 pub const CLIENT_SIDE_DECORATION_ROUNDING: Pixels = px(10.0);
@@ -213,7 +213,7 @@ impl SystemAppearance {
 
 /// A theme family is a grouping of themes under a single name.
 ///
-/// For example, the "One" theme family contains the "One Light" and "One Dark" themes.
+/// For example, the "Sands" theme family contains the "Sands Light" and "Sands Dark" themes.
 ///
 /// It can also be used to package themes with many variants.
 ///

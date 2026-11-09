@@ -324,6 +324,9 @@ pub struct MultiWorkspace {
 
 impl EventEmitter<MultiWorkspaceEvent> for MultiWorkspace {}
 
+/// Sands switches projects with its own Projects panel, so the threads sidebar is never opened.
+pub const SANDS_HIDES_THREADS_SIDEBAR: bool = true;
+
 impl MultiWorkspace {
     pub fn sidebar_side(&self, cx: &App) -> SidebarSide {
         self.sidebar
@@ -500,6 +503,10 @@ impl MultiWorkspace {
     }
 
     fn apply_open_sidebar(&mut self, cx: &mut Context<Self>) {
+        // Sands lists projects in its Projects panel and does not show the threads sidebar.
+        if SANDS_HIDES_THREADS_SIDEBAR {
+            return;
+        }
         self.sidebar_open = true;
         self.retain_active_workspace(cx);
         let sidebar_focus_handle = self.sidebar.as_ref().map(|s| s.focus_handle(cx));

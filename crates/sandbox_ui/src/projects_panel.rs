@@ -52,6 +52,11 @@ pub(crate) fn init(cx: &mut App) {
     .detach();
 }
 
+/// The last project list, shared by the Projects panels of all windows and projects.
+struct ProjectsCache(Vec<SandboxInfo>);
+
+impl gpui::Global for ProjectsCache {}
+
 enum ProjectList {
     Loading,
     Loaded(Vec<SandboxInfo>),
@@ -84,7 +89,12 @@ impl ProjectsPanel {
                     workspace: workspace_handle,
                     focus_handle: cx.focus_handle(),
                     position: DockPosition::Left,
-                    projects: ProjectList::Loading,
+                    // Every project in a window has its own panel; starting from the last known
+                    // list keeps switching projects from flashing a loading state.
+                    projects: match cx.try_global::<ProjectsCache>() {
+                        Some(cache) => ProjectList::Loaded(cache.0.clone()),
+                        None => ProjectList::Loading,
+                    },
                     opening: None,
                     _refresh: Task::ready(()),
                     _problem_subscription: None,
@@ -100,7 +110,10 @@ impl ProjectsPanel {
             let result = cx.background_spawn(list_sandboxes()).await;
             this.update_in(cx, |this, window, cx| {
                 this.projects = match result {
-                    Ok(sandboxes) => ProjectList::Loaded(sandboxes),
+                    Ok(sandboxes) => {
+                        cx.set_global(ProjectsCache(sandboxes.clone()));
+                        ProjectList::Loaded(sandboxes)
+                    }
                     Err(error) => match Problem::of(&error) {
                         Some(problem) => {
                             let view = problem_view(problem, cx);

@@ -226,6 +226,23 @@ impl ThemeRegistry {
         self.get_icon_theme(DEFAULT_ICON_THEME_NAME)
     }
 
+    /// The icon themes a user can pick. Sands ships its own icons; the built-in default stays
+    /// registered as the fallback but is not offered.
+    pub fn list_selectable_icon_themes(&self) -> Vec<ThemeMeta> {
+        let themes = self.list_icon_themes();
+        if themes
+            .iter()
+            .any(|theme| theme.name.as_ref() != crate::DEFAULT_ICON_THEME_NAME)
+        {
+            themes
+                .into_iter()
+                .filter(|theme| theme.name.as_ref() != crate::DEFAULT_ICON_THEME_NAME)
+                .collect()
+        } else {
+            themes
+        }
+    }
+
     /// Returns the metadata of all icon themes in the registry.
     pub fn list_icon_themes(&self) -> Vec<ThemeMeta> {
         self.state

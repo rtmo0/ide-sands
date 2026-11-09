@@ -1,4 +1,10 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use collections::HashSet;
 use fuzzy_nucleo::{StringMatch, StringMatchCandidate};
@@ -33,9 +39,9 @@ mod projects_panel;
 mod sandbox_panel;
 mod sbx_problem;
 
-pub use kubernetes_view::KubernetesView;
-pub use projects_panel::ProjectsPanel;
-pub use sandbox_panel::SandboxPanel;
+pub use kubernetes_view::{KubernetesView, OpenKubernetes};
+pub use projects_panel::{NewProject, ProjectsPanel, ToggleProjectsPanel};
+pub use sandbox_panel::{SandboxPanel, ToggleSandboxPanel};
 
 /// Built-in `sbx` agents, by the name `sbx create` takes and the name shown to the user. `shell`
 /// is a sandbox without a coding agent.
@@ -109,6 +115,12 @@ pub(crate) fn open_sandbox(
     window
         .spawn(cx, async move |cx| {
             let sbx = Sbx::locate()?;
+            // `sbx diagnose` takes over a second; once it passed, a sandbox switch skips it and a
+            // failing connection still reports its own error.
+            if SBX_CHECKED.load(Ordering::Relaxed) {
+                return open_sandbox_directory(sbx, name, directory, app_state, open_options, cx)
+                    .await;
+            }
             let report = sbx.diagnose().await?;
             if let Err(error) = report.ensure_ready() {
                 // The Projects panel offers the fix (start the daemon, sign in) once it reloads;
@@ -138,29 +150,63 @@ pub(crate) fn open_sandbox(
                 }
                 sbx.setup_ssh().await?;
             }
-
-            let directory = match directory {
-                Some(directory) => directory,
-                None => sbx.default_directory(&name).await?,
-            };
-            let connection_options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
-                host: sbx::ssh_host(&name).into(),
-                nickname: Some(name),
-                // Sands builds its own remote server, which cannot be downloaded inside the sandbox.
-                upload_binary_over_ssh: true,
-                ..Default::default()
-            });
-            open_remote_project(
-                connection_options,
-                vec![PathBuf::from(directory)],
-                app_state,
-                open_options,
-                cx,
-            )
-            .await?;
-            anyhow::Ok(())
+            SBX_CHECKED.store(true, Ordering::Relaxed);
+            open_sandbox_directory(sbx, name, directory, app_state, open_options, cx).await
         })
         .detach_and_prompt_err("Failed to open project", window, cx, |_, _, _| None);
+}
+
+/// Whether `sbx` was found ready and SSH configured during this session.
+static SBX_CHECKED: AtomicBool = AtomicBool::new(false);
+
+async fn open_sandbox_directory(
+    sbx: Sbx,
+    name: String,
+    directory: Option<String>,
+    app_state: Arc<workspace::AppState>,
+    open_options: OpenOptions,
+    cx: &mut gpui::AsyncWindowContext,
+) -> anyhow::Result<()> {
+    let directory = match directory {
+        Some(directory) => directory,
+        None => default_directory(&sbx, &name).await?,
+    };
+    let connection_options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+        host: sbx::ssh_host(&name).into(),
+        nickname: Some(name),
+        // Sands builds its own remote server, which cannot be downloaded inside the sandbox.
+        upload_binary_over_ssh: true,
+        ..Default::default()
+    });
+    open_remote_project(
+        connection_options,
+        vec![PathBuf::from(directory)],
+        app_state,
+        open_options,
+        cx,
+    )
+    .await?;
+    Ok(())
+}
+
+/// A sandbox's workspace directory never changes, and asking for it costs an `sbx exec`.
+async fn default_directory(sbx: &Sbx, name: &str) -> anyhow::Result<String> {
+    static DIRECTORIES: std::sync::Mutex<Option<collections::HashMap<String, String>>> =
+        std::sync::Mutex::new(None);
+    let cached = DIRECTORIES
+        .lock()
+        .ok()
+        .and_then(|directories| directories.as_ref()?.get(name).cloned());
+    if let Some(directory) = cached {
+        return Ok(directory);
+    }
+    let directory = sbx.default_directory(name).await?;
+    if let Ok(mut directories) = DIRECTORIES.lock() {
+        directories
+            .get_or_insert_default()
+            .insert(name.to_string(), directory.clone());
+    }
+    Ok(directory)
 }
 
 /// The sandbox is the trust boundary in Sands: code inside it cannot reach the host, so its

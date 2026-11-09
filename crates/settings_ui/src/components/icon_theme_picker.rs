@@ -25,7 +25,7 @@ impl IconThemePickerDelegate {
         let theme_registry = ThemeRegistry::global(cx);
 
         let icon_themes: Vec<SharedString> = theme_registry
-            .list_icon_themes()
+            .list_selectable_icon_themes()
             .into_iter()
             .map(|theme_meta| theme_meta.name)
             .collect();

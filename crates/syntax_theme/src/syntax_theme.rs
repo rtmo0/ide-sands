@@ -225,11 +225,11 @@ mod bundled_themes {
     }
 
     impl SyntaxTheme {
-        /// Load the "One Dark" syntax theme from the bundled theme JSON.
-        pub fn one_dark() -> Arc<Self> {
+        /// Load the "Sands Dark" syntax theme from the bundled theme JSON.
+        pub fn sands_dark() -> Arc<Self> {
             load_theme(
-                include_str!("../../../assets/themes/one/one.json"),
-                "One Dark",
+                include_str!("../../../assets/themes/sands/sands.json"),
+                "Sands Dark",
             )
         }
     }

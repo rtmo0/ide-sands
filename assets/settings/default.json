@@ -14,8 +14,8 @@
   // The JetBrains New UI icons ship with Sands (assets/icons/icon_themes/jetbrains).
   "icon_theme": {
     "mode": "system",
-    "light": "JetBrains New UI Icons (Light)",
-    "dark": "JetBrains New UI Icons (Dark)",
+    "light": "Sands UI Icons (Light)",
+    "dark": "Sands UI Icons (Dark)",
   },
   // The name of a base set of key bindings to use.
   // This setting can take the following values:
@@ -3032,7 +3032,7 @@
   //     "settings": {
   //       "agent_ui_font_size": 20.0,
   //       "buffer_font_size": 20.0,
-  //       "theme": "One Light",
+  //       "theme": "Sands Light",
   //       "ui_font_size": 20.0
   //     }
   //   },

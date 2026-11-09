@@ -84,7 +84,7 @@ impl IconThemeSelectorDelegate {
 
         let registry = ThemeRegistry::global(cx);
         let mut themes = registry
-            .list_icon_themes()
+            .list_selectable_icon_themes()
             .into_iter()
             .filter(|meta| {
                 if let Some(theme_filter) = themes_filter {

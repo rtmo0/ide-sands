@@ -1,4 +1,4 @@
-use std::{future::Future, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use gpui::{
@@ -63,6 +63,12 @@ const MODEL_API_HOSTS: [&str; 9] = [
     "api.githubcopilot.com",
 ];
 
+/// The last snapshot of every sandbox, shared by the Sandbox panels of all projects.
+#[derive(Default)]
+struct SnapshotCache(collections::HashMap<String, Arc<Snapshot>>);
+
+impl gpui::Global for SnapshotCache {}
+
 struct Snapshot {
     info: SandboxInfo,
     configured: Option<ConfiguredResources>,
@@ -82,7 +88,7 @@ enum KubernetesState {
 enum PanelState {
     NoSandbox,
     Loading,
-    Loaded(Box<Snapshot>),
+    Loaded(Arc<Snapshot>),
     Failed(SharedString),
     Problem(Entity<SbxProblemView>),
 }
@@ -136,7 +142,12 @@ impl SandboxPanel {
                     workspace: workspace_handle,
                     focus_handle: cx.focus_handle(),
                     position: DockPosition::Right,
-                    state: PanelState::Loading,
+                    // Each project has its own panel; the last snapshot of its sandbox shows at
+                    // once instead of a loading state.
+                    state: connected_sandbox(workspace, cx)
+                        .and_then(|name| cx.try_global::<SnapshotCache>()?.0.get(&name).cloned())
+                        .map(PanelState::Loaded)
+                        .unwrap_or(PanelState::Loading),
                     active: false,
                     page: PanelPage::Overview,
                     port_input,
@@ -189,7 +200,13 @@ impl SandboxPanel {
                     let updated = this.update_in(cx, |this, window, cx| {
                         this.state = match result {
                             None => PanelState::NoSandbox,
-                            Some(Ok(snapshot)) => PanelState::Loaded(Box::new(snapshot)),
+                            Some(Ok(snapshot)) => {
+                                let snapshot = Arc::new(snapshot);
+                                cx.default_global::<SnapshotCache>()
+                                    .0
+                                    .insert(snapshot.info.name.clone(), snapshot.clone());
+                                PanelState::Loaded(snapshot)
+                            }
                             Some(Err(error)) => match Problem::of_any(&error) {
                                 Some(problem) => this.problem_state(problem, window, cx),
                                 None => PanelState::Failed(format!("{error:#}").into()),

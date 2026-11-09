@@ -1,10 +1,10 @@
 {
   "$schema": "https://zed.dev/schema/icon_themes/v0.1.0.json",
   "author": "ANKDDEV",
-  "name": "JetBrains New UI Icons Theme",
+  "name": "Sands UI Icons",
   "themes": [
     {
-      "name": "JetBrains New UI Icons (Dark)",
+      "name": "Sands UI Icons (Dark)",
       "appearance": "dark",
       "directory_icons": {
         "collapsed": "icons/folder_dark.svg",
@@ -125,7 +125,7 @@
       }
     },
     {
-      "name": "JetBrains New UI Icons (Light)",
+      "name": "Sands UI Icons (Light)",
       "appearance": "dark",
       "directory_icons": {
         "collapsed": "icons/folder.svg",
