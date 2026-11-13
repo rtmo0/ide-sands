@@ -186,6 +186,8 @@ function download_and_unpack() {
     rm -rf "$temp_dir"
 }
 
+# The dugite archives name their members `./bin/git`; GNU tar, unlike bsdtar, only extracts a
+# member whose name matches exactly.
 function download_git() {
     local architecture=$1
     local target_binary=$2
@@ -195,10 +197,10 @@ function download_git() {
 
     case "$architecture" in
         aarch64-apple-darwin)
-            download_and_unpack "https://github.com/desktop/dugite-native/releases/download/${GIT_VERSION}/dugite-native-${GIT_VERSION}-${GIT_VERSION_SHA}-macOS-arm64.tar.gz" bin/git ./git
+            download_and_unpack "https://github.com/desktop/dugite-native/releases/download/${GIT_VERSION}/dugite-native-${GIT_VERSION}-${GIT_VERSION_SHA}-macOS-arm64.tar.gz" ./bin/git ./git
             ;;
         x86_64-apple-darwin)
-            download_and_unpack "https://github.com/desktop/dugite-native/releases/download/${GIT_VERSION}/dugite-native-${GIT_VERSION}-${GIT_VERSION_SHA}-macOS-x64.tar.gz" bin/git ./git
+            download_and_unpack "https://github.com/desktop/dugite-native/releases/download/${GIT_VERSION}/dugite-native-${GIT_VERSION}-${GIT_VERSION_SHA}-macOS-x64.tar.gz" ./bin/git ./git
             ;;
         *)
             echo "Unsupported architecture: $architecture"
@@ -375,5 +377,5 @@ cp target/${target_triple}/${target_dir}/Sands "${app_path}/Contents/MacOS/Sands
 cp target/${target_triple}/${target_dir}/cli "${app_path}/Contents/MacOS/cli"
 sign_app_binaries
 
-sign_binary "target/$target_triple/release/remote-server"
-gzip -f --stdout --best target/$target_triple/release/remote-server > target/zed-remote-server-macos-$arch_suffix.gz
+sign_binary "target/$target_triple/${target_dir}/remote-server"
+gzip -f --stdout --best "target/$target_triple/${target_dir}/remote-server" > target/zed-remote-server-macos-$arch_suffix.gz
