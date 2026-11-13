@@ -9,8 +9,7 @@ use gpui::{AsyncApp, BorrowAppContext, Context, Entity, EventEmitter, Subscripti
 use lsp::{DEFAULT_LSP_REQUEST_TIMEOUT_SECS, LanguageServerName};
 use paths::{
     EDITORCONFIG_NAME, debug_task_file_name, local_debug_file_relative_path,
-    local_settings_file_relative_path, local_tasks_file_relative_path,
-    local_vscode_launch_file_relative_path, local_vscode_tasks_file_relative_path, task_file_name,
+    local_settings_file_relative_path, local_tasks_file_relative_path, task_file_name,
 };
 use rpc::{
     AnyProtoClient, TypedEnvelope,
@@ -24,10 +23,9 @@ pub use settings::LspSettings;
 use settings::{
     DapSettingsContent, EditorconfigEvent, InvalidSettingsError, LocalSettingsKind,
     LocalSettingsPath, RegisterSetting, SemanticTokenRules, Settings, SettingsLocation,
-    SettingsStore, parse_json_with_comments, watch_config_file,
+    SettingsStore, watch_config_file,
 };
 use std::{cell::OnceCell, collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
-use task::{DebugTaskFile, TaskTemplates, VsCodeDebugTaskFile, VsCodeTaskFile};
 use util::{ResultExt, rel_path::RelPath, serde::default_true};
 use worktree::{PathChange, UpdatedEntriesSet, Worktree, WorktreeId};
 
@@ -859,7 +857,7 @@ pub struct SettingsObserver {
     _global_debug_config_watcher: Task<()>,
 }
 
-/// SettingsObserver observers changes to .zed/{settings, task}.json files in local worktrees
+/// SettingsObserver observers changes to .sands/{settings, task}.json files in local worktrees
 /// (or the equivalent protobuf messages from upstream) and updates local settings
 /// and sends notifications downstream.
 /// In ssh mode it also monitors ~/.config/zed/{settings, task}.json and sends the content
@@ -1206,35 +1204,11 @@ impl SettingsObserver {
                     .unwrap()
                     .into();
                 (settings_dir, LocalSettingsKind::Tasks)
-            } else if path.ends_with(local_vscode_tasks_file_relative_path()) {
-                let settings_dir = path
-                    .ancestors()
-                    .nth(
-                        local_vscode_tasks_file_relative_path()
-                            .components()
-                            .count()
-                            .saturating_sub(1),
-                    )
-                    .unwrap()
-                    .into();
-                (settings_dir, LocalSettingsKind::Tasks)
             } else if path.ends_with(local_debug_file_relative_path()) {
                 let settings_dir = path
                     .ancestors()
                     .nth(
                         local_debug_file_relative_path()
-                            .components()
-                            .count()
-                            .saturating_sub(1),
-                    )
-                    .unwrap()
-                    .into();
-                (settings_dir, LocalSettingsKind::Debug)
-            } else if path.ends_with(local_vscode_launch_file_relative_path()) {
-                let settings_dir = path
-                    .ancestors()
-                    .nth(
-                        local_vscode_tasks_file_relative_path()
                             .components()
                             .count()
                             .saturating_sub(1),
@@ -1278,49 +1252,7 @@ impl SettingsObserver {
                     if removed {
                         None
                     } else {
-                        Some(
-                            async move {
-                                let content = fs.load(&abs_path).await?;
-                                if abs_path.ends_with(local_vscode_tasks_file_relative_path().as_std_path()) {
-                                    let vscode_tasks =
-                                        parse_json_with_comments::<VsCodeTaskFile>(&content)
-                                            .with_context(|| {
-                                                format!("parsing VSCode tasks, file {abs_path:?}")
-                                            })?;
-                                    let zed_tasks = TaskTemplates::try_from(vscode_tasks)
-                                        .with_context(|| {
-                                            format!(
-                                        "converting VSCode tasks into Zed ones, file {abs_path:?}"
-                                    )
-                                        })?;
-                                    serde_json::to_string(&zed_tasks).with_context(|| {
-                                        format!(
-                                            "serializing Zed tasks into JSON, file {abs_path:?}"
-                                        )
-                                    })
-                                } else if abs_path.ends_with(local_vscode_launch_file_relative_path().as_std_path()) {
-                                    let vscode_tasks =
-                                        parse_json_with_comments::<VsCodeDebugTaskFile>(&content)
-                                            .with_context(|| {
-                                                format!("parsing VSCode debug tasks, file {abs_path:?}")
-                                            })?;
-                                    let zed_tasks = DebugTaskFile::try_from(vscode_tasks)
-                                        .with_context(|| {
-                                            format!(
-                                        "converting VSCode debug tasks into Zed ones, file {abs_path:?}"
-                                    )
-                                        })?;
-                                    serde_json::to_string(&zed_tasks).with_context(|| {
-                                        format!(
-                                            "serializing Zed tasks into JSON, file {abs_path:?}"
-                                        )
-                                    })
-                                } else {
-                                    Ok(content)
-                                }
-                            }
-                            .await,
-                        )
+                        Some(async move { fs.load(&abs_path).await }.await)
                     },
                 )
             });

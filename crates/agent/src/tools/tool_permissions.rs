@@ -67,7 +67,7 @@ pub async fn canonicalize_worktree_roots<C: gpui::AppContext>(
 ///
 /// This is needed for paths where the leaf (or intermediate directories) don't
 /// exist yet but an ancestor may be a symlink. For example, when creating
-/// `.zed/settings.json` where `.zed` is a symlink to an external directory.
+/// `.sands/settings.json` where `.zed` is a symlink to an external directory.
 ///
 /// Note: intermediate directories *can* be symlinks (not just leaf entries),
 /// so we must walk the full ancestor chain. For example:
@@ -99,12 +99,12 @@ async fn canonicalize_with_ancestors(path: &Path, fs: &dyn Fs) -> Option<PathBuf
 }
 
 /// Returns the canonicalized global agent skills directory
-/// (`~/.agents/skills`).
+/// (`~/.sands/skills`).
 ///
 /// Recomputed on every call rather than cached: the underlying
 /// `canonicalize_with_ancestors` is a few `stat` syscalls (which the OS
 /// page cache already handles), and a process-wide cache would either go
-/// stale if the user moved `~/.agents/skills`, or pollute across tests
+/// stale if the user moved `~/.sands/skills`, or pollute across tests
 /// using different `FakeFs` instances.
 async fn canonical_global_skills_dir(fs: &dyn Fs) -> Option<PathBuf> {
     canonicalize_with_ancestors(&agent_skills::global_skills_dir(), fs).await
@@ -116,7 +116,7 @@ fn is_within_any_worktree(canonical_path: &Path, canonical_worktree_roots: &[Pat
         .any(|root| canonical_path.starts_with(root))
 }
 
-/// If `path` names `~/.agents/skills` or one of its descendants, return the
+/// If `path` names `~/.sands/skills` or one of its descendants, return the
 /// canonicalized absolute path. Returns `None` for any path that resolves
 /// outside the global skills tree, for relative paths that don't start with
 /// `~`, or if the skills directory itself can't be canonicalized (fail closed
@@ -131,7 +131,7 @@ pub async fn resolve_global_skill_path(path: &Path, fs: &dyn Fs) -> Option<PathB
     // Canonicalize both sides so symlinks can't sneak the path out of the
     // skills tree (and so different but equivalent path representations
     // match). The lexical check above intentionally runs first, so a
-    // symlinked `~/.agents/skills` root can't broaden the allowlist to every
+    // symlinked `~/.sands/skills` root can't broaden the allowlist to every
     // path under the symlink target. A linked immediate skill directory is
     // allowed separately, but only for paths that stay under that skill target.
     let canonical_path = fs.canonicalize(&normalized_path).await.ok()?;
@@ -216,7 +216,7 @@ fn resolve_lexical_global_skill_path(path: &Path) -> Option<PathBuf> {
         .then_some(normalized_path)
 }
 
-/// If `path` names `~/.agents/skills` or one of its descendants, return a
+/// If `path` names `~/.sands/skills` or one of its descendants, return a
 /// canonical absolute path for it. Unlike [`resolve_global_skill_path`], the
 /// target path may or may not exist on disk yet — the caller decides whether
 /// to read, write, or create it. Returns `None` for any other path, including
@@ -241,7 +241,7 @@ fn is_strict_descendant(path: &Path, ancestor: &Path) -> bool {
 /// Returns whether `path` resolves to the global agent skills directory itself.
 ///
 /// This is used by destructive tools to reject operations targeting the root
-/// `~/.agents/skills` directory while still allowing operations on individual
+/// `~/.sands/skills` directory while still allowing operations on individual
 /// skills or resources beneath it.
 pub async fn resolves_to_global_skills_dir(path: &Path, fs: &dyn Fs) -> bool {
     let Some(normalized_path) = resolve_lexical_global_skill_path(path) else {
@@ -258,7 +258,7 @@ pub async fn resolves_to_global_skills_dir(path: &Path, fs: &dyn Fs) -> bool {
 }
 
 /// Filters a previously-resolved global skills path so that callers which
-/// must never act on `~/.agents/skills` itself (move, delete) only see paths
+/// must never act on `~/.sands/skills` itself (move, delete) only see paths
 /// that point strictly below the skills root.
 async fn restrict_to_skill_descendant(
     canonical_path: Option<PathBuf>,
@@ -270,13 +270,13 @@ async fn restrict_to_skill_descendant(
 }
 
 /// Like [`resolve_global_skill_path`], but only succeeds for paths strictly
-/// below `~/.agents/skills`, not the skills directory itself.
+/// below `~/.sands/skills`, not the skills directory itself.
 pub async fn resolve_global_skill_descendant_path(path: &Path, fs: &dyn Fs) -> Option<PathBuf> {
     restrict_to_skill_descendant(resolve_global_skill_path(path, fs).await, fs).await
 }
 
 /// Like [`resolve_creatable_global_skill_path`], but only succeeds for paths
-/// strictly below `~/.agents/skills`, not the skills directory itself.
+/// strictly below `~/.sands/skills`, not the skills directory itself.
 pub async fn resolve_creatable_global_skill_descendant_path(
     path: &Path,
     fs: &dyn Fs,
@@ -285,16 +285,16 @@ pub async fn resolve_creatable_global_skill_descendant_path(
 }
 
 /// Returns the kind of sensitive settings or agent skills location this path targets, if any:
-/// either inside a `.zed/` local-settings directory, inside `.agents/skills/`, or inside
+/// either inside a `.sands/` local-settings directory, inside `.sands/skills/`, or inside
 /// the global config dir.
 ///
 /// `canonical_worktree_roots` should be the result of
 /// [`canonicalize_worktree_roots`]; it's used to re-check the local
-/// `.zed/` and `.agents/skills/` protections against the canonical form
+/// `.sands/` and `.sands/skills/` protections against the canonical form
 /// of `path`, which catches two classes of bypass that the raw-component
 /// scan misses:
 ///
-///   1. `..` traversal, e.g. `.agents/foo/../skills/SKILL.md`. The raw
+///   1. `..` traversal, e.g. `.sands/foo/../skills/SKILL.md`. The raw
 ///      components are `[.agents, foo, .., skills, SKILL.md]`, so the
 ///      consecutive-pair match in [`is_agents_skills_path`] fails.
 ///   2. Intra-project symlinks, e.g. a symlink `safe -> .zed` followed
@@ -305,9 +305,9 @@ pub async fn resolve_creatable_global_skill_descendant_path(
 ///
 /// After canonicalizing we strip the matching worktree root before
 /// re-scanning components, so that a worktree literally rooted at a path
-/// like `~/projects/.zed/foo` doesn't classify every file inside it as
-/// `.zed/` local-settings — only files that have `.zed` (or
-/// `.agents/skills`) inside the worktree are flagged.
+/// like `~/projects/.sands/foo` doesn't classify every file inside it as
+/// `.sands/` local-settings — only files that have `.zed` (or
+/// `.sands/skills`) inside the worktree are flagged.
 pub async fn sensitive_settings_kind(
     path: &Path,
     canonical_worktree_roots: &[PathBuf],
@@ -317,15 +317,17 @@ pub async fn sensitive_settings_kind(
 
     // Fast path: scan the raw path components before any I/O. Covers the
     // common case where the agent passes a path that literally contains
-    // `.zed/` or `.agents/skills/`.
+    // `.sands/` or `.sands/skills/`.
+    // Skills live inside the settings folder (`.sands/skills`), so they are checked first to
+    // keep their own kind.
+    if is_agents_skills_path(path) {
+        return Some(SensitiveSettingsKind::AgentSkills);
+    }
+
     if path.components().any(|component| {
         component_matches_ignore_ascii_case(component.as_os_str(), local_settings_folder)
     }) {
         return Some(SensitiveSettingsKind::Local);
-    }
-
-    if is_agents_skills_path(path) {
-        return Some(SensitiveSettingsKind::AgentSkills);
     }
 
     if let Some(canonical_path) = canonicalize_with_ancestors(path, fs).await {
@@ -337,13 +339,13 @@ pub async fn sensitive_settings_kind(
                 continue;
             };
 
+            if is_agents_skills_path(relative) {
+                return Some(SensitiveSettingsKind::AgentSkills);
+            }
             if relative.components().any(|component| {
                 component_matches_ignore_ascii_case(component.as_os_str(), local_settings_folder)
             }) {
                 return Some(SensitiveSettingsKind::Local);
-            }
-            if is_agents_skills_path(relative) {
-                return Some(SensitiveSettingsKind::AgentSkills);
             }
 
             // The canonical path can only live inside one worktree, so
@@ -652,10 +654,11 @@ pub fn authorize_file_edit(
     // SensitiveSettingsKind on these fast paths and skip the async
     // `sensitive_settings_kind` canonicalization step below.
     let local_settings_folder = paths::local_settings_folder_name();
-    let is_local_settings = path.components().any(|component| {
-        component_matches_ignore_ascii_case(component.as_os_str(), local_settings_folder)
-    });
     let is_agents_skills = is_agents_skills_path(path);
+    let is_local_settings = !is_agents_skills
+        && path.components().any(|component| {
+            component_matches_ignore_ascii_case(component.as_os_str(), local_settings_folder)
+        });
 
     cx.spawn(async move |cx| {
         // Resolve the path and check for symlink escapes.
@@ -922,7 +925,7 @@ mod tests {
 
         let fs = FakeFs::new(cx.executor());
         let input_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("my-skill");
         let expected_path = agent_skills::global_skills_dir().join("my-skill");
@@ -951,7 +954,7 @@ mod tests {
         .await;
 
         let input_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("my-skill")
             .join("SKILL.md");
@@ -987,7 +990,7 @@ mod tests {
         .expect("skill directory should be symlinked");
 
         let input_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("my-skill")
             .join("references")
@@ -1036,7 +1039,7 @@ mod tests {
         .expect("skill directory should be symlinked");
 
         let input_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("my-skill")
             .join("secret")
@@ -1057,9 +1060,9 @@ mod tests {
         init_test(cx);
 
         let fs = FakeFs::new(cx.executor());
-        let sibling_path = PathBuf::from("~").join(".agents").join("not-skills");
+        let sibling_path = PathBuf::from("~").join(".sands").join("not-skills");
         let escaped_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("..")
             .join("not-skills");
@@ -1095,7 +1098,7 @@ mod tests {
             .expect("symlink should be created");
 
         let escaped_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("link")
             .join("new-dir");
@@ -1114,7 +1117,7 @@ mod tests {
         init_test(cx);
 
         let fs = FakeFs::new(cx.executor());
-        fs.insert_tree(paths::home_dir(), json!({ ".agents": {} }))
+        fs.insert_tree(paths::home_dir(), json!({ ".sands": {} }))
             .await;
         fs.insert_tree(path!("/tmp"), json!({ "outside.txt": "outside" }))
             .await;
@@ -1139,7 +1142,7 @@ mod tests {
         );
 
         let traversed_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("..")
             .join("outside");
@@ -1161,7 +1164,7 @@ mod tests {
         fs.insert_tree(
             paths::home_dir(),
             json!({
-                ".agents": {},
+                ".sands": {},
                 "outside.txt": "outside",
             }),
         )

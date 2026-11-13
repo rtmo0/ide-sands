@@ -6989,7 +6989,7 @@ async fn test_remote_worktree_root_repo_metadata_cleared_only_by_completed_scan(
 
 // Regression test: a remote worktree used to emit `UpdatedEntries` with an
 // empty changeset (`Arc::default()`), discarding the changed paths. Consumers
-// that key off those paths - notably the agent's `.agents/skills` refresh -
+// that key off those paths - notably the agent's `.sands/skills` refresh -
 // therefore never fired on remote projects, so skills pasted into an already
 // open project were never picked up. The changeset must carry the real paths.
 //
@@ -7005,7 +7005,7 @@ async fn test_remote_worktree_update_entries_carry_changed_paths(cx: &mut TestAp
     fs.insert_tree(
         path!("/root"),
         json!({
-            ".agents": {
+            ".sands": {
                 "skills": {}
             }
         }),
@@ -7095,9 +7095,9 @@ async fn test_remote_worktree_update_entries_carry_changed_paths(cx: &mut TestAp
     cx.run_until_parked();
     changes.lock().clear();
 
-    // Paste a skill folder into `.agents/skills` on the host.
+    // Paste a skill folder into `.sands/skills` on the host.
     fs.insert_tree(
-        path!("/root/.agents/skills/skill-1"),
+        path!("/root/.sands/skills/skill-1"),
         json!({ "SKILL.md": "skill" }),
     )
     .await;
@@ -7110,7 +7110,7 @@ async fn test_remote_worktree_update_entries_carry_changed_paths(cx: &mut TestAp
         assert!(
             changes
                 .iter()
-                .any(|(path, change)| path == ".agents/skills/skill-1/SKILL.md"
+                .any(|(path, change)| path == ".sands/skills/skill-1/SKILL.md"
                     && *change == PathChange::AddedOrUpdated),
             "remote UpdatedEntries should carry the added skill path, got {:?}",
             changes
@@ -7122,7 +7122,7 @@ async fn test_remote_worktree_update_entries_carry_changed_paths(cx: &mut TestAp
     // removals, so the remote worktree must resolve their paths against the
     // previous snapshot before it is replaced.
     fs.remove_dir(
-        path!("/root/.agents/skills/skill-1").as_ref(),
+        path!("/root/.sands/skills/skill-1").as_ref(),
         RemoveOptions {
             recursive: true,
             ignore_if_not_exists: false,
@@ -7138,7 +7138,7 @@ async fn test_remote_worktree_update_entries_carry_changed_paths(cx: &mut TestAp
     assert!(
         changes
             .iter()
-            .any(|(path, change)| path == ".agents/skills/skill-1/SKILL.md"
+            .any(|(path, change)| path == ".sands/skills/skill-1/SKILL.md"
                 && *change == PathChange::Removed),
         "remote UpdatedEntries should carry removed paths resolved from the \
          previous snapshot, got {:?}",

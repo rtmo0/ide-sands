@@ -1870,7 +1870,7 @@ mod tests {
 
         assert_eq!(
             path,
-            Path::new(path!("/project/.agents/skills/draft-pr/SKILL.md"))
+            Path::new(path!("/project/.sands/skills/draft-pr/SKILL.md"))
         );
         let content = fs.load(&path).await.expect("file should exist");
         let skill = parse_skill_frontmatter(&path, &content, SkillSource::Global)
@@ -1886,8 +1886,10 @@ mod tests {
         let existing_content = "---\nname: draft-pr\ndescription: existing\n---\nbody\n";
         let (fs, project, worktree) = init_worktree_test(
             serde_json::json!({
-                ".zed": { "settings.json": r#"{ "file_scan_exclusions": [".agents"] }"# },
-                ".agents": { "skills": { "draft-pr": { "SKILL.md": existing_content } } },
+                ".sands": {
+                    "settings.json": r#"{ "file_scan_exclusions": [".sands/skills"] }"#,
+                    "skills": { "draft-pr": { "SKILL.md": existing_content } },
+                },
             }),
             cx,
         )
@@ -1895,7 +1897,7 @@ mod tests {
         worktree.read_with(cx, |worktree, _| {
             assert!(
                 worktree
-                    .entry_for_path(RelPath::from_unix_str(".agents/skills/draft-pr").unwrap())
+                    .entry_for_path(RelPath::from_unix_str(".sands/skills/draft-pr").unwrap())
                     .is_none(),
                 "the excluded skill should be missing from the worktree"
             );
@@ -1909,9 +1911,7 @@ mod tests {
             "error message should mention the conflict, got: {err}"
         );
         let content = fs
-            .load(Path::new(path!(
-                "/project/.agents/skills/draft-pr/SKILL.md"
-            )))
+            .load(Path::new(path!("/project/.sands/skills/draft-pr/SKILL.md")))
             .await
             .expect("existing skill should still exist");
         assert_eq!(content, existing_content);
@@ -1922,7 +1922,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let (_fs, project, worktree) = init_worktree_test(
-            serde_json::json!({ ".agents": { "skills": { "draft-pr": "i am a stray file" } } }),
+            serde_json::json!({ ".sands": { "skills": { "draft-pr": "i am a stray file" } } }),
             cx,
         )
         .await;

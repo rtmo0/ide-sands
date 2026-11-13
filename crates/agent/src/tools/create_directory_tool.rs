@@ -30,11 +30,11 @@ use std::path::{Path, PathBuf};
     directory — so, rather than requesting write access to a broad existing parent (e.g. your \
     home directory) just to create something inside it, create the specific directory here \
     first and then write into it. The only other supported path outside the project is \
-    `~/.agents/skills` or a descendant, for global agent skills."
+    `~/.sands/skills` or a descendant, for global agent skills."
 )]
 #[cfg_attr(
     not(any(target_os = "linux", target_os = "macos")),
-    doc = "The only supported path outside the project is `~/.agents/skills` or a descendant, \
+    doc = "The only supported path outside the project is `~/.sands/skills` or a descendant, \
     for global agent skills."
 )]
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -51,7 +51,7 @@ pub struct CreateDirectoryToolInput {
     /// </example>
     ///
     /// <example>
-    /// To create a global agent skill directory, you may provide a path under `~/.agents/skills`, such as `~/.agents/skills/my-skill`.
+    /// To create a global agent skill directory, you may provide a path under `~/.sands/skills`, such as `~/.sands/skills/my-skill`.
     /// </example>
     pub path: String,
 
@@ -368,7 +368,7 @@ mod tests {
 
         let tool = Arc::new(CreateDirectoryTool::new(project));
         let input_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("my-skill")
             .to_string_lossy()

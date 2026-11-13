@@ -24,7 +24,7 @@ use util::markdown::MarkdownInlineCode;
 ///
 /// This tool should be used when it's desirable to create a copy of a file or directory without modifying the original.
 /// It's much more efficient than doing this by separately reading and then writing the file or directory's contents, so this tool should be preferred over that approach whenever copying is the goal.
-/// The only supported paths outside the project are descendants of `~/.agents/skills`, for global agent skills.
+/// The only supported paths outside the project are descendants of `~/.sands/skills`, for global agent skills.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CopyPathToolInput {
     /// The source path of the file or directory to copy.
@@ -304,7 +304,7 @@ mod tests {
 
         let tool = Arc::new(CopyPathTool::new(project));
         let input_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("my-skill")
             .to_string_lossy()
@@ -374,7 +374,7 @@ mod tests {
 
         let tool = Arc::new(CopyPathTool::new(project));
         let destination_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("exported-skill")
             .to_string_lossy()

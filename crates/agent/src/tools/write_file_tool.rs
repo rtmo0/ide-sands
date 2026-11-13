@@ -23,12 +23,12 @@ const DEFAULT_UI_TEXT: &str = "Writing file";
 ///
 /// Before using this tool, verify the directory path is correct (only applicable when creating new files). Use the `list_directory` tool to verify the parent directory exists and is the correct location
 ///
-/// The only supported path outside the project is `~/.agents/skills` or a descendant, for global agent skills.
+/// The only supported path outside the project is `~/.sands/skills` or a descendant, for global agent skills.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct WriteFileToolInput {
     /// The full path of the file to create or overwrite in the project.
     ///
-    /// WARNING: When specifying which file path need changing, you MUST start each path with one of the project's root directories, unless it's a global agent skill under `~/.agents/skills`.
+    /// WARNING: When specifying which file path need changing, you MUST start each path with one of the project's root directories, unless it's a global agent skill under `~/.sands/skills`.
     ///
     /// The following examples assume we have two root directories in the project:
     /// - /a/b/backend
@@ -45,7 +45,7 @@ pub struct WriteFileToolInput {
     /// </example>
     ///
     /// <example>
-    /// To create or overwrite a global agent skill file, you may provide a path under `~/.agents/skills`, such as `~/.agents/skills/my-skill/SKILL.md`.
+    /// To create or overwrite a global agent skill file, you may provide a path under `~/.sands/skills`, such as `~/.sands/skills/my-skill/SKILL.md`.
     /// </example>
     pub path: PathBuf,
 
@@ -346,7 +346,7 @@ mod tests {
             setup_test_with_fs(cx, fs, &[path!("/root").as_ref()]).await;
 
         let input_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("my-skill")
             .join("SKILL.md");

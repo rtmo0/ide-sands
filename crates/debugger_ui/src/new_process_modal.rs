@@ -1068,11 +1068,8 @@ impl DebugDelegate {
                     };
 
                     match path.components().next_back() {
-                        Some(".zed") => {
+                        Some(name) if name == paths::local_settings_folder_name() => {
                             path.push(RelPath::from_unix_str("debug.json").unwrap());
-                        }
-                        Some(".vscode") => {
-                            path.push(RelPath::from_unix_str("launch.json").unwrap());
                         }
                         _ => {}
                     }
@@ -1165,7 +1162,9 @@ impl DebugDelegate {
                         id: _,
                         directory_in_worktree: dir,
                         id_base: _,
-                    } => dir.ends_with(RelPath::from_unix_str(".zed").unwrap()),
+                    } => dir.ends_with(
+                        RelPath::from_unix_str(paths::local_settings_folder_name()).unwrap(),
+                    ),
                     _ => false,
                 });
 

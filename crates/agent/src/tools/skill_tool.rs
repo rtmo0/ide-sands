@@ -534,7 +534,7 @@ mod tests {
                 .into()
         });
 
-        let project_skill_path = Path::new("/test/.agents/skills/project-skill/SKILL.md");
+        let project_skill_path = Path::new("/test/.sands/skills/project-skill/SKILL.md");
         let project_skill = parse_skill_frontmatter(
             project_skill_path,
             project_skill_content,

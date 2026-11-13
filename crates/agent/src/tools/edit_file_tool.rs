@@ -26,7 +26,7 @@ const DEFAULT_UI_TEXT: &str = "Editing file";
 /// Before using this tool, use the `read_file` tool to understand the file's contents and context.
 /// To create a new file or overwrite an existing one with completely new contents, use the `write_file` tool instead.
 ///
-/// The only supported path outside the project is `~/.agents/skills` or a descendant, for global agent skills.
+/// The only supported path outside the project is `~/.sands/skills` or a descendant, for global agent skills.
 ///
 /// `read_file` prefixes each line of its output with a line number right-aligned in a
 /// 6-character field followed by a single tab, then the line's actual content. When you
@@ -37,7 +37,7 @@ const DEFAULT_UI_TEXT: &str = "Editing file";
 pub struct EditFileToolInput {
     /// The full path of the file to edit in the project.
     ///
-    /// WARNING: When specifying which file path need changing, you MUST start each path with one of the project's root directories, unless it's a global agent skill under `~/.agents/skills`.
+    /// WARNING: When specifying which file path need changing, you MUST start each path with one of the project's root directories, unless it's a global agent skill under `~/.sands/skills`.
     ///
     /// The following examples assume we have two root directories in the project:
     /// - /a/b/backend
@@ -54,7 +54,7 @@ pub struct EditFileToolInput {
     /// </example>
     ///
     /// <example>
-    /// To edit a global agent skill file, you may provide a path under `~/.agents/skills`, such as `~/.agents/skills/my-skill/SKILL.md`.
+    /// To edit a global agent skill file, you may provide a path under `~/.sands/skills`, such as `~/.sands/skills/my-skill/SKILL.md`.
     /// </example>
     pub path: PathBuf,
 
@@ -628,7 +628,7 @@ mod tests {
             setup_test_with_fs(cx, fs, &[path!("/root").as_ref()]).await;
 
         let input_path = PathBuf::from("~")
-            .join(".agents")
+            .join(".sands")
             .join("skills")
             .join("my-skill")
             .join("SKILL.md");
@@ -1490,13 +1490,14 @@ mod tests {
 
         // Test 1: Path with .zed component should require confirmation
         let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
-        let _auth = cx
-            .update(|cx| edit_tool.authorize(&PathBuf::from(".zed/settings.json"), &stream_tx, cx));
+        let _auth = cx.update(|cx| {
+            edit_tool.authorize(&PathBuf::from(".sands/settings.json"), &stream_tx, cx)
+        });
 
         let event = stream_rx.expect_authorization().await;
         assert_eq!(
             event.tool_call.title,
-            MaybeUndefined::Value("Edit `.zed/settings.json` (local settings)".into())
+            MaybeUndefined::Value("Edit `.sands/settings.json` (local settings)".into())
         );
 
         // Test 2: Path outside project should require confirmation
@@ -1520,12 +1521,12 @@ mod tests {
         // Test 4: Path with .zed in the middle should require confirmation
         let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
         let _auth = cx.update(|cx| {
-            edit_tool.authorize(&PathBuf::from("root/.zed/tasks.json"), &stream_tx, cx)
+            edit_tool.authorize(&PathBuf::from("root/.sands/tasks.json"), &stream_tx, cx)
         });
         let event = stream_rx.expect_authorization().await;
         assert_eq!(
             event.tool_call.title,
-            MaybeUndefined::Value("Edit `root/.zed/tasks.json` (local settings)".into())
+            MaybeUndefined::Value("Edit `root/.sands/tasks.json` (local settings)".into())
         );
 
         // Test 5: When global default is allow, sensitive and outside-project
@@ -1536,14 +1537,15 @@ mod tests {
             agent_settings::AgentSettings::override_global(settings, cx);
         });
 
-        // 5.1: .zed/settings.json is a sensitive path — still prompts
+        // 5.1: .sands/settings.json is a sensitive path — still prompts
         let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
-        let _auth = cx
-            .update(|cx| edit_tool.authorize(&PathBuf::from(".zed/settings.json"), &stream_tx, cx));
+        let _auth = cx.update(|cx| {
+            edit_tool.authorize(&PathBuf::from(".sands/settings.json"), &stream_tx, cx)
+        });
         let event = stream_rx.expect_authorization().await;
         assert_eq!(
             event.tool_call.title,
-            MaybeUndefined::Value("Edit `.zed/settings.json` (local settings)".into())
+            MaybeUndefined::Value("Edit `.sands/settings.json` (local settings)".into())
         );
 
         // 5.2: /etc/hosts is outside the project, but Allow auto-approves
@@ -1577,14 +1579,14 @@ mod tests {
             MaybeUndefined::Value("Edit `/etc/hosts`".into())
         );
 
-        // 5.5: .agents/skills is a sensitive path — still prompts. The
+        // 5.5: .sands/skills is a sensitive path — still prompts. The
         // sensitive-path classifier runs regardless of the default mode, so
         // it doesn't matter that we're now in Confirm mode — we're checking
         // that the path is recognized and gets the "(agent skills)" tag.
         let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
         let _auth = cx.update(|cx| {
             edit_tool.authorize(
-                &PathBuf::from("root/.agents/skills/my-skill/SKILL.md"),
+                &PathBuf::from("root/.sands/skills/my-skill/SKILL.md"),
                 &stream_tx,
                 cx,
             )
@@ -1593,7 +1595,7 @@ mod tests {
         assert_eq!(
             event.tool_call.title,
             MaybeUndefined::Value(
-                "Edit `root/.agents/skills/my-skill/SKILL.md` (agent skills)".into()
+                "Edit `root/.sands/skills/my-skill/SKILL.md` (agent skills)".into()
             )
         );
         // Skills always prompt, so no "Always allow" option is offered.
@@ -1611,7 +1613,7 @@ mod tests {
             event.options,
         );
 
-        // 5.6: The global .agents/skills directory is sensitive — still prompts
+        // 5.6: The global .sands/skills directory is sensitive — still prompts
         let global_skill_path = agent_skills::global_skills_dir()
             .join("my-skill")
             .join("SKILL.md");
@@ -1627,11 +1629,11 @@ mod tests {
         );
     }
 
-    /// `.agents/foo/../skills/SKILL.md` would slip past the raw
-    /// `is_agents_skills_path` check (the components `.agents` and
-    /// `skills` aren't consecutive once `..` sits between them), but it
-    /// canonicalizes to a path inside `.agents/skills/`, so it has to
-    /// still prompt with the agent-skills tag.
+    /// `.sands/foo/../skills/SKILL.md` slips past the raw
+    /// `is_agents_skills_path` check (`.sands` and `skills` aren't
+    /// consecutive once `..` sits between them). Skills live inside the
+    /// project settings folder, so the path still prompts, tagged as local
+    /// settings.
     #[gpui::test]
     async fn test_streaming_authorize_blocks_dotdot_skills_bypass(cx: &mut TestAppContext) {
         init_test(cx);
@@ -1639,7 +1641,7 @@ mod tests {
         fs.insert_tree(
             path!("/root"),
             json!({
-                ".agents": {
+                ".sands": {
                     "foo": {},
                     "skills": { "my-skill": { "SKILL.md": "target" } },
                 },
@@ -1652,7 +1654,7 @@ mod tests {
         let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
         let _auth = cx.update(|cx| {
             edit_tool.authorize(
-                &PathBuf::from(path!("/root/.agents/foo/../skills/my-skill/SKILL.md")),
+                &PathBuf::from(path!("/root/.sands/foo/../skills/my-skill/SKILL.md")),
                 &stream_tx,
                 cx,
             )
@@ -1663,15 +1665,15 @@ mod tests {
                 .tool_call
                 .title
                 .value()
-                .is_some_and(|title| title.ends_with("(agent skills)")),
-            "`..` traversal into .agents/skills must still prompt: {:?}",
+                .is_some_and(|title| title.ends_with("(local settings)")),
+            "`..` traversal into .sands/skills must still prompt: {:?}",
             event.tool_call.title,
         );
     }
 
-    /// `.zed/foo/../../safe.json` similarly sidesteps the consecutive-
-    /// component scan for `.zed/`, so the canonical-path recheck has to
-    /// catch it. (We escape *out* of `.zed/` here and back in via `..`,
+    /// `.sands/foo/../../safe.json` similarly sidesteps the consecutive-
+    /// component scan for `.sands/`, so the canonical-path recheck has to
+    /// catch it. (We escape *out* of `.sands/` here and back in via `..`,
     /// just to confirm the recheck doesn't naively trust the raw scan.)
     #[gpui::test]
     async fn test_streaming_authorize_blocks_dotdot_settings_bypass(cx: &mut TestAppContext) {
@@ -1680,7 +1682,7 @@ mod tests {
         fs.insert_tree(
             path!("/root"),
             json!({
-                ".zed": { "foo": {}, "settings.json": "{}" },
+                ".sands": { "foo": {}, "settings.json": "{}" },
             }),
         )
         .await;
@@ -1690,7 +1692,7 @@ mod tests {
         let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
         let _auth = cx.update(|cx| {
             edit_tool.authorize(
-                &PathBuf::from(path!("/root/.zed/foo/../settings.json")),
+                &PathBuf::from(path!("/root/.sands/foo/../settings.json")),
                 &stream_tx,
                 cx,
             )
@@ -1720,11 +1722,11 @@ mod tests {
         fs.insert_tree(
             path!("/root"),
             json!({
-                ".zed": { "settings.json": "{}" },
+                ".sands": { "settings.json": "{}" },
             }),
         )
         .await;
-        fs.insert_symlink(path!("/root/safe"), PathBuf::from(".zed"))
+        fs.insert_symlink(path!("/root/safe"), PathBuf::from(".sands"))
             .await;
         let (edit_tool, _project, _action_log, _fs, _thread) =
             setup_test_with_fs(cx, fs, &[path!("/root").as_ref()]).await;
@@ -1750,7 +1752,7 @@ mod tests {
     }
 
     /// Same as the previous test but for the agent-skills sensitive
-    /// path, via an intra-project symlink `safe -> .agents/skills`.
+    /// path, via an intra-project symlink `safe -> .sands/skills`.
     #[gpui::test]
     async fn test_streaming_authorize_blocks_intra_project_symlink_skills_bypass(
         cx: &mut TestAppContext,
@@ -1760,13 +1762,13 @@ mod tests {
         fs.insert_tree(
             path!("/root"),
             json!({
-                ".agents": {
+                ".sands": {
                     "skills": { "my-skill": { "SKILL.md": "target" } },
                 },
             }),
         )
         .await;
-        fs.insert_symlink(path!("/root/safe"), PathBuf::from(".agents/skills"))
+        fs.insert_symlink(path!("/root/safe"), PathBuf::from(".sands/skills"))
             .await;
         let (edit_tool, _project, _action_log, _fs, _thread) =
             setup_test_with_fs(cx, fs, &[path!("/root").as_ref()]).await;
@@ -1786,7 +1788,7 @@ mod tests {
                 .title
                 .value()
                 .is_some_and(|title| title.ends_with("(agent skills)")),
-            "Intra-project symlink to .agents/skills must still prompt: {:?}",
+            "Intra-project symlink to .sands/skills must still prompt: {:?}",
             event.tool_call.title,
         );
     }
@@ -2057,7 +2059,7 @@ mod tests {
         fs.insert_tree(
             "/workspace/shared",
             json!({
-                ".zed": {
+                ".sands": {
                     "settings.json": "{}"
                 }
             }),
@@ -2078,7 +2080,7 @@ mod tests {
             ("frontend/src/main.js", false, "File in first worktree"),
             ("backend/src/main.rs", false, "File in second worktree"),
             (
-                "shared/.zed/settings.json",
+                "shared/.sands/settings.json",
                 true,
                 ".zed file in third worktree",
             ),
@@ -2115,11 +2117,11 @@ mod tests {
         fs.insert_tree(
             "/project",
             json!({
-                ".zed": {
+                ".sands": {
                     "settings.json": "{}"
                 },
                 "src": {
-                    ".zed": {
+                    ".sands": {
                         "local.json": "{}"
                     }
                 }
@@ -2176,7 +2178,7 @@ mod tests {
             "/project",
             json!({
                 "existing.txt": "content",
-                ".zed": {
+                ".sands": {
                     "settings.json": "{}"
                 }
             }),
@@ -2191,7 +2193,11 @@ mod tests {
             // Test .zed path with different modes
             let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
             let _auth = cx.update(|cx| {
-                edit_tool.authorize(&PathBuf::from("project/.zed/settings.json"), &stream_tx, cx)
+                edit_tool.authorize(
+                    &PathBuf::from("project/.sands/settings.json"),
+                    &stream_tx,
+                    cx,
+                )
             });
 
             stream_rx.expect_authorization().await;

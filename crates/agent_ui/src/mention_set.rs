@@ -889,7 +889,7 @@ mod tests {
         let content = read_skill_mention_with_project_and_host_copies(
             "global",
             path!("/home/user"),
-            path!("/home/user/.agents/skills/my-skill/SKILL.md"),
+            path!("/home/user/.sands/skills/my-skill/SKILL.md"),
             cx,
         )
         .await;
@@ -942,7 +942,7 @@ mod tests {
         let content = read_skill_mention_with_project_and_host_copies(
             "project",
             path!("/project"),
-            path!("/project/.agents/skills/my-skill/SKILL.md"),
+            path!("/project/.sands/skills/my-skill/SKILL.md"),
             cx,
         )
         .await;

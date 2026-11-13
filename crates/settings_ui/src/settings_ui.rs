@@ -6991,7 +6991,7 @@ pub mod test {
             .insert_tree(
                 "/project",
                 json!({
-                    ".agents": {
+                    ".sands": {
                         "skills": {
                             "project-skill": {
                                 "SKILL.md": "---\nname: project-skill\ndescription: A project level skill\n---\n\nProject instructions."
@@ -7035,7 +7035,7 @@ pub mod test {
                 .collect();
         let project_skills: Vec<Skill> = load_skills_from_directory(
             &fs,
-            Path::new("/project/.agents/skills"),
+            Path::new("/project/.sands/skills"),
             SkillSource::ProjectLocal {
                 worktree_id: SkillScopeId(worktree_id.to_usize()),
                 worktree_root_name: "project".into(),
@@ -7156,14 +7156,14 @@ pub mod test {
         host_fs
             .insert_tree(
                 "/project",
-                json!({ ".agents": { "skills": { "my-skill": { "SKILL.md": "host copy" } } } }),
+                json!({ ".sands": { "skills": { "my-skill": { "SKILL.md": "host copy" } } } }),
             )
             .await;
         let project_fs = fs::FakeFs::new(cx.executor());
         project_fs
             .insert_tree(
                 "/project",
-                json!({ ".agents": { "skills": { "my-skill": { "SKILL.md": "project copy" } } } }),
+                json!({ ".sands": { "skills": { "my-skill": { "SKILL.md": "project copy" } } } }),
             )
             .await;
 
@@ -7195,7 +7195,7 @@ pub mod test {
     }
 
     fn project_skill(worktree_id: project::WorktreeId, name: &str) -> agent_skills::Skill {
-        let directory_path = PathBuf::from(format!("/project/.agents/skills/{name}"));
+        let directory_path = PathBuf::from(format!("/project/.sands/skills/{name}"));
         agent_skills::Skill {
             name: name.to_string(),
             description: String::new(),
@@ -7270,11 +7270,11 @@ pub mod test {
         host_fs
             .insert_tree(
                 "/elsewhere",
-                serde_json::json!({ ".agents": { "skills": { "my-skill": { "SKILL.md": "elsewhere copy" } } } }),
+                serde_json::json!({ ".sands": { "skills": { "my-skill": { "SKILL.md": "elsewhere copy" } } } }),
             )
             .await;
         let mut skill = project_skill(worktree_id, "my-skill");
-        skill.directory_path = PathBuf::from("/elsewhere/.agents/skills/my-skill");
+        skill.directory_path = PathBuf::from("/elsewhere/.sands/skills/my-skill");
         skill.skill_file_path = skill.directory_path.join("SKILL.md");
 
         settings_window
@@ -7673,7 +7673,7 @@ mod project_settings_update_tests {
         let fs = FakeFs::new(cx.executor());
         let tree = if let Some(settings_content) = initial_settings {
             json!({
-                ".zed": {
+                ".sands": {
                     "settings.json": settings_content
                 },
                 "src": { "main.rs": "" }
@@ -7690,7 +7690,7 @@ mod project_settings_update_tests {
             (worktree.read(cx).id(), worktree.downgrade())
         });
 
-        let rel_path: Arc<RelPath> = RelPath::from_unix_str(".zed/settings.json")
+        let rel_path: Arc<RelPath> = RelPath::from_unix_str(".sands/settings.json")
             .expect("valid path")
             .into_arc();
         let project_path = ProjectPath {
@@ -7920,7 +7920,7 @@ mod project_settings_update_tests {
 
         let file_content = setup
             .fs
-            .load("/project/.zed/settings.json".as_ref())
+            .load("/project/.sands/settings.json".as_ref())
             .await
             .unwrap();
         assert_eq!(
@@ -7953,7 +7953,7 @@ mod project_settings_update_tests {
         setup
             .fs
             .save(
-                "/project/.zed/settings.json".as_ref(),
+                "/project/.sands/settings.json".as_ref(),
                 &r#"{ "tab_size": 99 }"#.into(),
                 Default::default(),
             )

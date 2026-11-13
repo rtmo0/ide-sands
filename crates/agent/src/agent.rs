@@ -554,7 +554,7 @@ pub struct NativeAgent {
     fs: Arc<dyn Fs>,
     _subscriptions: Vec<Subscription>,
     /// Tracks the lifecycle of global skills directory observation. We
-    /// don't eagerly watch (or even check for) `~/.agents/skills/` at
+    /// don't eagerly watch (or even check for) `~/.sands/skills/` at
     /// startup; users who never engage with the agent panel pay zero
     /// filesystem cost. The watch is kicked off lazily by
     /// [`Self::ensure_skills_scan_started`], which is called from the
@@ -570,10 +570,10 @@ enum SkillsState {
     #[default]
     Idle,
     /// A one-shot scan task is in flight. It checks whether
-    /// `~/.agents/skills/` exists; if so, transitions to `Watching`,
+    /// `~/.sands/skills/` exists; if so, transitions to `Watching`,
     /// otherwise back to `Idle`.
     Scanning,
-    /// A watch task is observing `~/.agents/skills/`. It transitions
+    /// A watch task is observing `~/.sands/skills/`. It transitions
     /// back to `Idle` if the watched directory itself is removed.
     Watching,
 }
@@ -741,7 +741,7 @@ impl NativeAgent {
     /// repeat.
     ///
     /// The scan itself runs detached on the foreground executor. If
-    /// `~/.agents/skills/` exists it transitions state to
+    /// `~/.sands/skills/` exists it transitions state to
     /// [`SkillsState::Watching`] and starts a recursive watch;
     /// otherwise it transitions back to [`SkillsState::Idle`] so the
     /// next trigger retries (covering the case where the user creates
@@ -1256,7 +1256,7 @@ impl NativeAgent {
         };
 
         // Load project-local skills, but only from worktrees the user has
-        // trusted. Skills in `.agents/skills/` ship with the project; a
+        // trusted. Skills in `.sands/skills/` ship with the project; a
         // freshly cloned untrusted repo can carry hostile descriptions or
         // bodies, so we keep them out of the catalog and the slash-command
         // list until trust is granted. The subscription in
@@ -4626,8 +4626,8 @@ mod internal_tests {
             name: name.to_string(),
             description: description.to_string(),
             source: SkillSource::Global,
-            directory_path: PathBuf::from(format!("/home/user/.agents/skills/{name}")),
-            skill_file_path: PathBuf::from(format!("/home/user/.agents/skills/{name}/SKILL.md")),
+            directory_path: PathBuf::from(format!("/home/user/.sands/skills/{name}")),
+            skill_file_path: PathBuf::from(format!("/home/user/.sands/skills/{name}/SKILL.md")),
             load_warnings: Vec::new(),
             disable_model_invocation: false,
             embedded_body: None,
@@ -6867,8 +6867,8 @@ mod internal_tests {
                 worktree_id: SkillScopeId(1),
                 worktree_root_name: worktree.into(),
             },
-            directory_path: PathBuf::from(format!("/{worktree}/.agents/skills/{name}")),
-            skill_file_path: PathBuf::from(format!("/{worktree}/.agents/skills/{name}/SKILL.md")),
+            directory_path: PathBuf::from(format!("/{worktree}/.sands/skills/{name}")),
+            skill_file_path: PathBuf::from(format!("/{worktree}/.sands/skills/{name}/SKILL.md")),
             load_warnings: Vec::new(),
             disable_model_invocation: false,
             embedded_body: None,
@@ -8029,7 +8029,7 @@ mod internal_tests {
         fs.insert_tree(
             "/project",
             json!({
-                ".agents": {
+                ".sands": {
                     "skills": {
                         "my-skill": {
                             "SKILL.md": "---\nname: my-skill\ndescription: A project skill\n---\n\nbody"
@@ -8192,7 +8192,7 @@ mod internal_tests {
         fs.insert_tree(
             "/project",
             json!({
-                ".agents": {
+                ".sands": {
                     "skills": {
                         "my-skill": {
                             "SKILL.md": "---\nname: my-skill\ndescription: A project skill\n---\n\ndisk body"
@@ -8227,7 +8227,7 @@ mod internal_tests {
         assert_eq!(body, "disk body");
 
         // Edit the buffer in memory without writing to disk.
-        let relative_path: Arc<RelPath> = rel_path(".agents/skills/my-skill/SKILL.md").into();
+        let relative_path: Arc<RelPath> = rel_path(".sands/skills/my-skill/SKILL.md").into();
         let buffer = project
             .update(cx, |project, cx| {
                 project.open_buffer((worktree_id, relative_path), cx)
@@ -8282,7 +8282,7 @@ mod internal_tests {
         fs.insert_tree(
             "/project",
             json!({
-                ".agents": { "skills": { "huge-skill": { "SKILL.md": oversized } } }
+                ".sands": { "skills": { "huge-skill": { "SKILL.md": oversized } } }
             }),
         )
         .await;
@@ -8323,7 +8323,7 @@ mod internal_tests {
         fs.insert_tree(
             "/project",
             json!({
-                ".agents": {
+                ".sands": {
                     "skills": {
                         "good": {
                             "SKILL.md": "---\nname: good\ndescription: Fine\n---\n\nbody"
@@ -8364,8 +8364,8 @@ mod internal_tests {
     /// buffers, and the broadened `.agents` refresh trigger must rebuild
     /// it when files under `.agents` change. We edit the SKILL.md buffer
     /// in memory, then touch an unrelated file directly under `.agents`
-    /// (not under `.agents/skills`) and assert the catalog reflects the
-    /// in-memory edit. Under the previous `.agents/skills`-only trigger
+    /// (not under `.sands/skills`) and assert the catalog reflects the
+    /// in-memory edit. Under the previous `.sands/skills`-only trigger
     /// this refresh would not have fired.
     #[gpui::test]
     async fn test_project_skill_metadata_refreshes_from_buffer(cx: &mut TestAppContext) {
@@ -8374,7 +8374,7 @@ mod internal_tests {
         fs.insert_tree(
             "/project",
             json!({
-                ".agents": {
+                ".sands": {
                     "skills": {
                         "my-skill": {
                             "SKILL.md": "---\nname: my-skill\ndescription: Original\n---\n\nbody"
@@ -8398,7 +8398,7 @@ mod internal_tests {
             assert_eq!(skill.description, "Original");
         });
 
-        let relative_path: Arc<RelPath> = rel_path(".agents/skills/my-skill/SKILL.md").into();
+        let relative_path: Arc<RelPath> = rel_path(".sands/skills/my-skill/SKILL.md").into();
         let buffer = project
             .update(cx, |project, cx| {
                 project.open_buffer((worktree_id, relative_path), cx)
@@ -8413,8 +8413,8 @@ mod internal_tests {
         });
 
         // Touch a file directly under `.agents` (not under
-        // `.agents/skills`) to trigger the broadened refresh path.
-        fs.insert_file("/project/.agents/marker.txt", b"hello".to_vec())
+        // `.sands/skills`) to trigger the broadened refresh path.
+        fs.insert_file("/project/.sands/marker.txt", b"hello".to_vec())
             .await;
         cx.run_until_parked();
 

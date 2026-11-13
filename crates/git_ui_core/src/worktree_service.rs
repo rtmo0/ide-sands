@@ -1477,7 +1477,7 @@ mod tests {
                     .update_file_based_tasks(
                         TaskSettingsLocation::Worktree(SettingsLocation {
                             worktree_id,
-                            path: rel_path(".zed"),
+                            path: rel_path(".sands"),
                         }),
                         Some(hook_tasks_json),
                     )
@@ -1500,7 +1500,7 @@ mod tests {
             json!({
                 "project": {
                     ".git": {},
-                    ".zed": {
+                    ".sands": {
                         "tasks.json": hook_tasks_json,
                     },
                     "src": {

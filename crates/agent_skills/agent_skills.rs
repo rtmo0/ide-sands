@@ -10,8 +10,9 @@ use std::sync::Arc;
 use url::Url;
 use util::paths::component_matches_ignore_ascii_case;
 
-/// First segment of the skills directory path: `.agents`.
-pub const AGENTS_DIR_NAME: &str = ".agents";
+/// First segment of the skills directory path: `.sands`, the folder that holds all of a Sands
+/// project's settings (and `~/.sands` for skills shared by every project).
+pub const AGENTS_DIR_NAME: &str = ".sands";
 
 /// Second segment of the skills directory path: `skills`.
 pub const SKILLS_DIR_NAME: &str = "skills";
@@ -38,7 +39,7 @@ pub const GLOBAL_SKILLS_DIR_DISPLAY: &str = concatcp!("~/", AGENTS_DIR_NAME, "/"
 pub struct SkillScopeId(pub usize);
 
 /// Cap on concurrent filesystem operations during skill discovery and loading.
-/// Without this bound, a `.agents/skills` directory containing thousands of
+/// Without this bound, a `.sands/skills` directory containing thousands of
 /// entries would fan out an equally large number of concurrent OS-level I/O
 /// operations, potentially exhausting file descriptors or stalling the app.
 const SKILL_IO_CONCURRENCY: usize = 16;
@@ -99,9 +100,9 @@ pub enum SkillSource {
     /// the lowest override priority (global and project-local skills can
     /// shadow them).
     BuiltIn,
-    /// From ~/.agents/skills/
+    /// From ~/.sands/skills/
     Global,
-    /// From {project}/.agents/skills/
+    /// From {project}/.sands/skills/
     ProjectLocal {
         worktree_id: SkillScopeId,
         worktree_root_name: Arc<str>,
@@ -739,7 +740,7 @@ pub fn builtin_skill_content(skill_file_path: &Path) -> Option<&'static str> {
     })
 }
 
-/// Returns the global skills directory: `~/.agents/skills`.
+/// Returns the global skills directory: `~/.sands/skills`.
 ///
 /// Other agents (e.g. Claude Code) already write skill files into this
 /// location, so a Zed installation may have skills here even before the
@@ -754,29 +755,29 @@ pub fn global_skills_dir() -> PathBuf {
 }
 
 /// Project-local skills live at this path relative to a worktree root,
-/// e.g. `<worktree>/.agents/skills/<skill>/SKILL.md`.
+/// e.g. `<worktree>/.sands/skills/<skill>/SKILL.md`.
 pub fn project_skills_relative_path() -> &'static str {
-    ".agents/skills"
+    ".sands/skills"
 }
 
 /// Returns `true` if `path` looks like it points into an agent skills
 /// directory — i.e. it contains `AGENTS_DIR_NAME` immediately followed by
 /// `SKILLS_DIR_NAME` as two consecutive path components, anywhere in the
 /// path. Comparison is case-insensitive so it agrees with classifiers
-/// that canonicalize against `~/.agents/skills` on case-insensitive
+/// that canonicalize against `~/.sands/skills` on case-insensitive
 /// filesystems (macOS/Windows by default).
 ///
 /// The path arriving here can be any of:
 ///
-///   1. Bare relative-to-worktree-root: `.agents/skills/...`
-///   2. Worktree-name prefixed:         `<worktree>/.agents/skills/...`
-///   3. Absolute:                       `/path/to/worktree/.agents/skills/...`
+///   1. Bare relative-to-worktree-root: `.sands/skills/...`
+///   2. Worktree-name prefixed:         `<worktree>/.sands/skills/...`
+///   3. Absolute:                       `/path/to/worktree/.sands/skills/...`
 ///
-/// Any-depth matching has a known cost: a `.agents/skills` directory
-/// nested inside vendored sources (e.g. `vendor/x/.agents/skills/...`)
+/// Any-depth matching has a known cost: a `.sands/skills` directory
+/// nested inside vendored sources (e.g. `vendor/x/.sands/skills/...`)
 /// would also be flagged. We accept that as the safer-failing direction —
 /// an extra confirmation prompt for a vendored file is annoying, while
-/// silently letting the agent overwrite a `.agents/skills` tree the user
+/// silently letting the agent overwrite a `.sands/skills` tree the user
 /// didn't expect to be touched is unsafe.
 pub fn is_agents_skills_path(path: &Path) -> bool {
     let mut components = path.components().map(|c| c.as_os_str());
@@ -2030,7 +2031,7 @@ description: A skill with no body content
     #[test]
     fn is_agents_skills_path_simple_positive() {
         assert!(is_agents_skills_path(Path::new(
-            "foo/.agents/skills/my-skill/SKILL.md"
+            "foo/.sands/skills/my-skill/SKILL.md"
         )));
     }
 
@@ -2041,23 +2042,21 @@ description: A skill with no body content
 
     #[test]
     fn is_agents_skills_path_double_agents() {
-        // `foo/.agents/.agents/skills` contains a `.agents/skills` pair at
+        // `foo/.sands/.sands/skills` contains a `.sands/skills` pair at
         // depths 2-3. Any-depth matching catches it; this is intentional, so
-        // a `.agents/skills` directory the user wasn't expecting to be
+        // a `.sands/skills` directory the user wasn't expecting to be
         // touched still prompts for confirmation.
-        assert!(is_agents_skills_path(Path::new(
-            "foo/.agents/.agents/skills"
-        )));
+        assert!(is_agents_skills_path(Path::new("foo/.sands/.sands/skills")));
     }
 
     #[test]
     fn is_agents_skills_path_agents_without_skills() {
-        assert!(!is_agents_skills_path(Path::new("foo/.agents/other")));
+        assert!(!is_agents_skills_path(Path::new("foo/.sands/other")));
     }
 
     #[test]
     fn is_agents_skills_path_at_start() {
-        assert!(is_agents_skills_path(Path::new(".agents/skills")));
+        assert!(is_agents_skills_path(Path::new(".sands/skills")));
     }
 
     #[test]
@@ -2067,22 +2066,22 @@ description: A skill with no body content
 
     #[test]
     fn is_agents_skills_path_deep_match() {
-        // Any-depth matching: nested `.agents/skills` directories — e.g.
+        // Any-depth matching: nested `.sands/skills` directories — e.g.
         // inside vendored sources — are flagged too. We prefer the extra
         // prompt over silently letting the agent edit something named
-        // `.agents/skills`.
-        assert!(is_agents_skills_path(Path::new("a/b/.agents/skills/x.txt")));
+        // `.sands/skills`.
+        assert!(is_agents_skills_path(Path::new("a/b/.sands/skills/x.txt")));
         assert!(is_agents_skills_path(Path::new(
-            "some/random/place/.agents/skills/foo"
+            "some/random/place/.sands/skills/foo"
         )));
     }
 
     #[test]
     fn is_agents_skills_path_absolute() {
-        // Absolute paths into a project-local `.agents/skills/` are caught
+        // Absolute paths into a project-local `.sands/skills/` are caught
         // by the same consecutive-component match.
         assert!(is_agents_skills_path(Path::new(
-            "/Users/foo/project/.agents/skills/my-skill/SKILL.md"
+            "/Users/foo/project/.sands/skills/my-skill/SKILL.md"
         )));
         assert!(!is_agents_skills_path(Path::new("/etc/hosts")));
     }
@@ -2091,10 +2090,10 @@ description: A skill with no body content
     fn is_agents_skills_path_case_insensitive() {
         // Filesystems on macOS/Windows are case-insensitive by default; the
         // classifier must agree.
-        assert!(is_agents_skills_path(Path::new(".AGENTS/skills/foo")));
-        assert!(is_agents_skills_path(Path::new(".agents/SKILLS/foo")));
+        assert!(is_agents_skills_path(Path::new(".SANDS/skills/foo")));
+        assert!(is_agents_skills_path(Path::new(".sands/SKILLS/foo")));
         assert!(is_agents_skills_path(Path::new(
-            "project/.AGENTS/SKILLS/foo"
+            "project/.SANDS/SKILLS/foo"
         )));
     }
 

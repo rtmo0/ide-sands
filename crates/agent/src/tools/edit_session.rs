@@ -359,7 +359,7 @@ pub(crate) struct EditSession {
 /// disk. `project_path` is `Some` for files that live inside one of the
 /// project's worktrees (i.e. that the standard project-path machinery can
 /// resolve), and `None` for global skill files reached through the
-/// `~/.agents/skills` allowlist.
+/// `~/.sands/skills` allowlist.
 struct EditSessionTarget {
     abs_path: PathBuf,
     project_path: Option<ProjectPath>,
@@ -1160,7 +1160,7 @@ async fn resolve_dirty_buffer(
 
 /// Mirrors [`resolve_path`]'s pre-auth validation for the global-skill
 /// branch: returns `Ok(Some(abs_path))` if the path lives under
-/// `~/.agents/skills` and is in a valid state for the requested mode,
+/// `~/.sands/skills` and is in a valid state for the requested mode,
 /// `Ok(None)` if the path isn't a global skill at all (so the caller should
 /// fall through to project-path resolution), or `Err(message)` if the path
 /// is a global skill but can't be used (missing in Edit mode, parent

@@ -206,12 +206,12 @@ use crate::{AgentTool, ToolCallEventStream, ToolInput, outline};
 /// - This tool supports reading image files. Supported formats: PNG, JPEG, WebP, GIF, BMP, TIFF.
 ///   Image files are returned as visual content that you can analyze directly.
 ///
-/// The only supported path outside the project is `~/.agents/skills` or a descendant, for global agent skills.
+/// The only supported path outside the project is `~/.sands/skills` or a descendant, for global agent skills.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ReadFileToolInput {
     /// The relative path of the file to read.
     ///
-    /// This path should never be absolute, and the first component of the path should always be a root directory in a project, unless it's a global agent skill under `~/.agents/skills`.
+    /// This path should never be absolute, and the first component of the path should always be a root directory in a project, unless it's a global agent skill under `~/.sands/skills`.
     ///
     /// <example>
     /// If the project has the following root directories:
@@ -224,7 +224,7 @@ pub struct ReadFileToolInput {
     /// </example>
     ///
     /// <example>
-    /// To read a global agent skill file, you may provide a path under `~/.agents/skills`, such as `~/.agents/skills/my-skill/SKILL.md`.
+    /// To read a global agent skill file, you may provide a path under `~/.sands/skills`, such as `~/.sands/skills/my-skill/SKILL.md`.
     /// </example>
     pub path: String,
     /// Optional line number to start reading on (1-based index)
@@ -1375,7 +1375,7 @@ mod test {
                     "test.rs": "mod tests { fn test_it() {} }",
                     "fixture.sql": "CREATE TABLE users (id INT, name VARCHAR(255));"
                 },
-                ".zed": {
+                ".sands": {
                     "settings.json": r#"{
                         "file_scan_exclusions": ["**/fixture.*"],
                         "private_files": ["**/secret.rs", "**/config.toml"]
@@ -1398,7 +1398,7 @@ mod test {
                     "README.md": "# Public Documentation",
                     "internal.md": "# Internal Secrets and Configuration"
                 },
-                ".zed": {
+                ".sands": {
                     "settings.json": r#"{
                         "file_scan_exclusions": ["**/internal.*"],
                         "private_files": ["**/private.js", "**/data.json"]

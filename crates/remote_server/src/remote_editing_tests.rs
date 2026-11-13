@@ -1367,7 +1367,7 @@ async fn test_remote_settings(cx: &mut TestAppContext, server_cx: &mut TestAppCo
     );
 
     fs.insert_tree(
-        "/code/project1/.zed",
+        "/code/project1/.sands",
         json!({
             "settings.json": r#"
                   {
@@ -1454,7 +1454,7 @@ async fn test_remote_lsp(cx: &mut TestAppContext, server_cx: &mut TestAppContext
     let (project, headless) = init_test(&fs, cx, server_cx).await;
 
     fs.insert_tree(
-        path!("/code/project1/.zed"),
+        path!("/code/project1/.sands"),
         json!({
             "settings.json": r#"
           {
@@ -1872,7 +1872,7 @@ async fn test_remote_call_hierarchy(cx: &mut TestAppContext, server_cx: &mut Tes
     let (project, headless) = init_test(&fs, cx, server_cx).await;
 
     fs.insert_tree(
-        path!("/code/project1/.zed"),
+        path!("/code/project1/.sands"),
         json!({
             "settings.json": r#"
           {
@@ -2970,7 +2970,7 @@ async fn test_remote_cancel_language_server_work(
     let (project, headless) = init_test(&fs, cx, server_cx).await;
 
     fs.insert_tree(
-        path!("/code/project1/.zed"),
+        path!("/code/project1/.sands"),
         json!({
             "settings.json": r#"
           {
@@ -5057,7 +5057,7 @@ async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestA
     fs.insert_tree(
         path!("/project"),
         json!({
-            ".agents": {
+            ".sands": {
                 "skills": {
                     "test-skill": {
                         "SKILL.md": "---\nname: test-skill\ndescription: test description\n---\ntest body"
@@ -5133,15 +5133,15 @@ async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestA
             "test body\n",
             "</skill_content>\n",
         ),
-        path!("/project/.agents/skills/test-skill"),
+        path!("/project/.sands/skills/test-skill"),
     );
     assert_eq!(output, SkillToolOutput::Found { rendered: expected });
 
-    fs.create_dir(Path::new(path!("/project/.agents/skills/test-2")))
+    fs.create_dir(Path::new(path!("/project/.sands/skills/test-2")))
         .await
         .unwrap();
     fs.insert_file(
-        path!("/project/.agents/skills/test-2/SKILL.md"),
+        path!("/project/.sands/skills/test-2/SKILL.md"),
         "---\nname: test-2\ndescription: test description\n---\ntest body"
             .as_bytes()
             .into(),
@@ -5182,7 +5182,7 @@ async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestA
             "test body\n",
             "</skill_content>\n",
         ),
-        path!("/project/.agents/skills/test-2"),
+        path!("/project/.sands/skills/test-2"),
     );
     assert_eq!(
         output,
@@ -5454,7 +5454,7 @@ async fn test_remote_context_server_receives_env_over_stdin(
 }
 
 // Files in a remote worktree are written by whatever runs on the remote machine (in Sands, the
-// agents in the sandbox), so its `.zed/settings.json` must not be able to start a process on
+// agents in the sandbox), so its `.sands/settings.json` must not be able to start a process on
 // the host.
 #[cfg(not(windows))]
 #[gpui::test]
@@ -5475,7 +5475,7 @@ async fn test_remote_worktree_settings_do_not_start_context_servers(
     fs.insert_tree(
         path!("/project"),
         json!({
-            ".zed": {
+            ".sands": {
                 "settings.json": json!({
                     "context_servers": {
                         "planted": { "command": "/bin/sh", "args": args }
@@ -5614,7 +5614,7 @@ async fn test_remote_apply_code_action_skips_unadvertised_command(
     let (project, headless) = init_test(&fs, cx, server_cx).await;
 
     fs.insert_tree(
-        path!("/code/project1/.zed"),
+        path!("/code/project1/.sands"),
         json!({
             "settings.json": r#"
           {
