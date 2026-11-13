@@ -15747,6 +15747,7 @@ name = "sandbox_ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "collections",
  "editor",
@@ -15766,6 +15767,7 @@ dependencies = [
  "sbx",
  "serde",
  "serde_json",
+ "settings",
  "smol",
  "sysinfo 0.39.6",
  "task",

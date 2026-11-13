@@ -29,8 +29,10 @@ collaborative editor with hosted AI services. Sands is a self-contained workbenc
   bring their tools, settings and network rules into the sandbox, an MCP server for the agents and a panel in the IDE.
 - **Batteries included.** No extension marketplace, no accounts, no telemetry and no hosted services. Languages,
   debuggers and themes ship with Sands. What is not in the box is not needed.
-- **Familiar from VS Code.** A JetBrains New UI look, VS Code's fonts, and support for `.vscode/tasks.json` and
-  `.vscode/launch.json`.
+- **One settings folder.** A project's settings, tasks, debug configurations, MCP servers, agent roles, skills and
+  instructions live in `.sands/`. Sands offers to move existing `.vscode/`, `.zed/`, `.claude/` and `.agents/`
+  settings there, converting VS Code's `tasks.json` and `launch.json`.
+- **Familiar from VS Code.** A JetBrains New UI look and VS Code's fonts.
 
 ![Creating a project: name it, pick a local Git repository or a Git URL, Sands creates the sandbox, attaches agents and opens the project](./assets/readme/sands-new-project.svg)
 

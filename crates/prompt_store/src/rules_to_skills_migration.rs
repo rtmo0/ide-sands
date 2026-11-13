@@ -2,7 +2,7 @@
 //! LMDB database) to two destinations:
 //!
 //! * **Non-Default Rules → global Agent Skills** under
-//!   `~/.agents/skills/<slug>/SKILL.md`. Non-Default Rules were only ever
+//!   `~/.sands/skills/<slug>/SKILL.md`. Non-Default Rules were only ever
 //!   included in a conversation when the user explicitly invoked them by
 //!   name, which maps cleanly onto Skills with
 //!   `disable-model-invocation: true` (slash-only, never auto-suggested
@@ -77,7 +77,7 @@ pub const MIGRATION_RESULT_KEY: &str = "rules_to_skills_migration_result";
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationResult {
     /// Non-Default Rules that were turned into global Skills under
-    /// `~/.agents/skills/`.
+    /// `~/.sands/skills/`.
     #[serde(default)]
     pub skill_names: Vec<String>,
     /// Default Rules that were appended to the global AGENTS.md.
@@ -592,7 +592,7 @@ fn format_skill_file(name: &str, body: &str) -> String {
 /// Cap on how many suffixed variants we'll try before giving up. In
 /// practice nobody has more than a handful of rules with the same slug;
 /// the cap exists purely to bound the worst case if a user has somehow
-/// filled `~/.agents/skills/` with thousands of `name-N` directories.
+/// filled `~/.sands/skills/` with thousands of `name-N` directories.
 const MAX_SLUG_SUFFIX: usize = 1000;
 
 async fn pick_available_skill_dir(

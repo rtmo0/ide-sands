@@ -40,11 +40,13 @@ mod new_project_modal;
 mod projects_panel;
 mod sandbox_panel;
 mod sbx_problem;
+mod settings_migration;
 
 pub use kubernetes_panel::{KubernetesPanel, ToggleKubernetesPanel};
 pub use kubernetes_view::{KubernetesView, OpenKubernetes};
 pub use projects_panel::{NewProject, ProjectsPanel, ToggleProjectsPanel};
 pub use sandbox_panel::{SandboxPanel, ToggleSandboxPanel};
+pub use settings_migration::MigrateProjectSettings;
 
 /// Built-in `sbx` agents, by the name `sbx create` takes and the name shown to the user. `shell`
 /// is a sandbox without a coding agent.
@@ -90,6 +92,7 @@ pub fn init(cx: &mut App) {
     kubernetes_view::init(cx);
     projects_panel::init(cx);
     sandbox_panel::init(cx);
+    settings_migration::init(cx);
     cx.observe_new(|workspace: &mut Workspace, _, cx| trust_sandbox_worktrees(workspace, cx))
         .detach();
 }

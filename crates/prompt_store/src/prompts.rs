@@ -20,6 +20,7 @@ use util::{
 };
 
 pub const RULES_FILE_NAMES: &[&str] = &[
+    ".sands/instructions.md",
     ".rules",
     ".cursorrules",
     ".windsurfrules",
