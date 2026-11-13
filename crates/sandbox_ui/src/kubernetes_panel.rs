@@ -1,9 +1,9 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use gpui::{
-    Action, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle,
-    Focusable, FontWeight, PathPromptOptions, Pixels, PromptLevel, SharedString, Task, WeakEntity,
-    actions, px,
+    Action, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable,
+    FontWeight, PathPromptOptions, Pixels, PromptLevel, SharedString, Task, WeakEntity, actions,
+    px,
 };
 use kubernetes::{Cluster, ClusterStatus, KubeconfigEntry, PreparedConnection};
 use sbx::Sbx;
@@ -263,7 +263,12 @@ impl KubernetesPanel {
         );
     }
 
-    fn open_explorer(&mut self, status: &ClusterStatus, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_explorer(
+        &mut self,
+        status: &ClusterStatus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if status.current {
             window.dispatch_action(OpenKubernetes.boxed_clone(), cx);
             return;
@@ -436,9 +441,9 @@ impl KubernetesPanel {
                         .child(
                             icon_button("refresh-clusters", IconName::RotateCw, "Refresh")
                                 .disabled(self.busy.is_some())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.refresh(window, cx)
-                                })),
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.refresh(window, cx)),
+                                ),
                         )
                         .child(
                             icon_button("add-cluster", IconName::Plus, "Add Cluster")
@@ -558,7 +563,9 @@ impl KubernetesPanel {
             .py_1p5()
             .gap_2()
             .items_start()
-            .when(is_current, |this| this.bg(cx.theme().colors().element_selected))
+            .when(is_current, |this| {
+                this.bg(cx.theme().colors().element_selected)
+            })
             .when(!is_current && !busy, |this| {
                 this.cursor_pointer()
                     .hover(|style| style.bg(cx.theme().colors().element_hover))
@@ -585,7 +592,9 @@ impl KubernetesPanel {
                                     })
                                     .truncate(),
                             )
-                            .when(is_current, |this| this.child(badge("current", Tone::Info, cx))),
+                            .when(is_current, |this| {
+                                this.child(badge("current", Tone::Info, cx))
+                            }),
                     )
                     .child(
                         caption(status.context.server.clone())
@@ -607,12 +616,18 @@ impl KubernetesPanel {
                 h_flex()
                     .gap_0p5()
                     .child(
-                        icon_button(("open-cluster", index), IconName::ArrowUpRight, "Open Explorer")
-                            .disabled(busy)
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                        icon_button(
+                            ("open-cluster", index),
+                            IconName::ArrowUpRight,
+                            "Open Explorer",
+                        )
+                        .disabled(busy)
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.open_explorer(&open_status, window, cx)
-                            })),
+                            },
+                        )),
                     )
                     .child(
                         icon_button(("remove-cluster", index), IconName::Trash, "Disconnect")
@@ -643,9 +658,8 @@ impl KubernetesPanel {
                             .color(Color::Error),
                     )
                     .child(
-                        secondary_button("retry-clusters", "Retry").on_click(cx.listener(
-                            |this, _, window, cx| this.refresh(window, cx),
-                        )),
+                        secondary_button("retry-clusters", "Retry")
+                            .on_click(cx.listener(|this, _, window, cx| this.refresh(window, cx))),
                     )
                     .into_any_element();
             }
@@ -662,9 +676,9 @@ impl KubernetesPanel {
                 .child(
                     primary_button("add-first-cluster", "Add Cluster")
                         .disabled(self.busy.is_some())
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.choose_kubeconfig(window, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.choose_kubeconfig(window, cx)),
+                        ),
                 )
                 .into_any_element();
         }
@@ -709,7 +723,12 @@ impl Render for KubernetesPanel {
             .size_full()
             .child(self.render_header(cx))
             .when_some(self.busy.clone(), |this, busy| {
-                this.child(div().px_3().py_1().child(caption(busy).size(LabelSize::XSmall)))
+                this.child(
+                    div()
+                        .px_3()
+                        .py_1()
+                        .child(caption(busy).size(LabelSize::XSmall)),
+                )
             })
             .when_some(self.error.clone(), |this, error| {
                 this.child(

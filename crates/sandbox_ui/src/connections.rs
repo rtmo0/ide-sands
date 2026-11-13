@@ -56,7 +56,11 @@ pub(crate) fn set_kubernetes(sandbox: &str, contexts: Vec<String>, cx: &mut App)
         return;
     }
     entry.kubernetes = contexts;
-    if store.0.get(sandbox).is_some_and(|entry| entry == &ProjectConnections::default()) {
+    if store
+        .0
+        .get(sandbox)
+        .is_some_and(|entry| entry == &ProjectConnections::default())
+    {
         store.0.remove(sandbox);
     }
     let contents = serde_json::to_vec_pretty(&store.0);
@@ -65,8 +69,7 @@ pub(crate) fn set_kubernetes(sandbox: &str, contexts: Vec<String>, cx: &mut App)
         if let Some(directory) = path.parent() {
             fs::create_dir_all(directory)?;
         }
-        fs::write(&path, contents?)
-            .with_context(|| format!("failed to write {}", path.display()))
+        fs::write(&path, contents?).with_context(|| format!("failed to write {}", path.display()))
     })
     .detach_and_log_err(cx);
 }

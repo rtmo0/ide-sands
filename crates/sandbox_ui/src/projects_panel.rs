@@ -665,7 +665,10 @@ mod tests {
         write("apps/backend/iam/cmd/server/main.go", "")?;
         write("apps/backend/iam/server.go", "")?;
         write("apps/backend/iam/handler.go", "")?;
-        write("apps/mobile/pubspec.yaml", "dependencies:\n  flutter:\n    sdk: flutter\n")?;
+        write(
+            "apps/mobile/pubspec.yaml",
+            "dependencies:\n  flutter:\n    sdk: flutter\n",
+        )?;
         write("apps/mobile/lib/main.dart", "")?;
         write("apps/mobile/lib/app.dart", "")?;
         write(
@@ -685,7 +688,14 @@ mod tests {
         names.sort_unstable();
         assert_eq!(
             names,
-            ["Flutter", "Go", "Kotlin", "Objective-C", "Swift", "TypeScript"]
+            [
+                "Flutter",
+                "Go",
+                "Kotlin",
+                "Objective-C",
+                "Swift",
+                "TypeScript"
+            ]
         );
         Ok(())
     }

@@ -147,6 +147,7 @@ members = [
     "crates/menu",
     "crates/mermaid_render",
     "crates/migrator",
+    "crates/model_gateway",
     "crates/miniprofiler_ui",
     "crates/mistral",
     "crates/multi_buffer",
@@ -426,6 +427,7 @@ markdown_preview = { path = "crates/markdown_preview" }
 menu = { path = "crates/menu" }
 mermaid_render = { path = "crates/mermaid_render" }
 migrator = { path = "crates/migrator" }
+model_gateway = { path = "crates/model_gateway" }
 miniprofiler_ui = { path = "crates/miniprofiler_ui" }
 mistral = { path = "crates/mistral" }
 multi_buffer = { path = "crates/multi_buffer" }

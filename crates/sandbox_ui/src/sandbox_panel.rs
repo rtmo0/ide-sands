@@ -3,8 +3,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 use chrono::{DateTime, Utc};
 use gpui::{
     Action, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, Pixels, SharedString, Subscription, Task, WeakEntity, actions,
-    px,
+    FontWeight, Pixels, SharedString, Subscription, Task, WeakEntity, actions, px,
 };
 use sbx::{
     ConfiguredResources, NetworkActivity, NetworkDecision, NetworkLog, PolicyRules, PublishedPort,
@@ -21,8 +20,8 @@ use workspace::{
 use crate::{
     connected_sandbox,
     design::{
-        Meter, Tone, badge, caption, icon_button, key_value, primary_button,
-        section_header, status_dot,
+        Meter, Tone, badge, caption, icon_button, key_value, primary_button, section_header,
+        status_dot,
     },
     new_project_modal::agent_icon,
     sbx_problem::{Problem, ProblemFixed, SbxProblemView, problem_view},

@@ -11056,6 +11056,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "model_gateway"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures 0.3.34",
+ "http_client",
+ "log",
+ "parking_lot",
+ "reqwest_client",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "uuid",
+]
+
+[[package]]
 name = "moka"
 version = "0.12.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15750,21 +15766,27 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "collections",
+ "credentials_provider",
  "editor",
  "file_icons",
  "fs",
  "futures 0.3.34",
  "fuzzy_nucleo",
  "gpui",
+ "http_client",
  "kubernetes",
  "language",
+ "language_model",
  "log",
  "menu",
+ "model_gateway",
  "paths",
  "picker",
  "project",
  "recent_projects",
  "remote",
+ "reqwest_client",
+ "sands_credentials_provider",
  "sands_project",
  "sbx",
  "serde",
@@ -15775,6 +15797,7 @@ dependencies = [
  "sysinfo 0.39.6",
  "task",
  "tempfile",
+ "tiny_http",
  "ui",
  "ui_input",
  "util",

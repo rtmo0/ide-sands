@@ -386,6 +386,34 @@ os.replace(path + ".sands-tmp", path)
 SANDS_SETTINGS
 "#;
 
+/// Sets or clears `ANTHROPIC_BASE_URL` in Claude Code's settings, which only Claude Code reads,
+/// so other programs in the sandbox keep talking to the API directly. Leaves a settings file
+/// that is not valid JSON alone.
+const CLAUDE_GATEWAY_INSTALLER: &str = r#"set -e
+mkdir -p "$HOME/.claude"
+python3 - "$1" <<'SANDS_SETTINGS'
+import json, os, sys
+path = os.path.expanduser("~/.claude/settings.json")
+try:
+    with open(path) as file:
+        settings = json.load(file)
+except FileNotFoundError:
+    settings = {}
+env = settings.get("env") or {}
+if sys.argv[1]:
+    env["ANTHROPIC_BASE_URL"] = sys.argv[1]
+else:
+    env.pop("ANTHROPIC_BASE_URL", None)
+if env:
+    settings["env"] = env
+else:
+    settings.pop("env", None)
+with open(path + ".sands-tmp", "w") as file:
+    json.dump(settings, file, indent=2)
+os.replace(path + ".sands-tmp", path)
+SANDS_SETTINGS
+"#;
+
 /// Language toolchains Sands sets up inside sandboxes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Toolchain {
@@ -1146,6 +1174,35 @@ impl Sbx {
         } else {
             Err(classify_failure(
                 "install the Claude status line",
+                &output.stderr,
+            ))
+        }
+    }
+
+    /// Points Claude Code in the sandbox at `base_url` for the Anthropic API, or back at the API
+    /// itself with `None`.
+    pub async fn point_claude_at(
+        &self,
+        name: &str,
+        base_url: Option<&str>,
+    ) -> Result<(), SbxError> {
+        let output = self
+            .exec(
+                name,
+                &[
+                    "bash",
+                    "-c",
+                    CLAUDE_GATEWAY_INSTALLER,
+                    "sands",
+                    base_url.unwrap_or(""),
+                ],
+            )
+            .await?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(classify_failure(
+                "point Claude Code at the model gateway",
                 &output.stderr,
             ))
         }

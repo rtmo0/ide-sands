@@ -35,6 +35,7 @@ mod agent_status;
 mod connections;
 mod delete_project;
 mod design;
+mod gateway;
 mod kubernetes_panel;
 mod kubernetes_view;
 mod new_project_modal;
@@ -92,6 +93,7 @@ pub fn init(cx: &mut App) {
     });
     agent_status::init(cx);
     connections::init(cx);
+    gateway::init(cx);
     kubernetes_panel::init(cx);
     kubernetes_view::init(cx);
     projects_panel::init(cx);
