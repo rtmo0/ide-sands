@@ -136,6 +136,19 @@ fn snapshot_path(project: &str) -> Result<PathBuf> {
         .join("approved.json"))
 }
 
+/// Removes everything Sands keeps on the host for a deleted project.
+pub fn forget(project: &str) -> Result<()> {
+    let path = snapshot_path(project)?;
+    let Some(directory) = path.parent() else {
+        return Ok(());
+    };
+    match fs::remove_dir_all(directory) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("removing {}", directory.display())),
+    }
+}
+
 impl Snapshot {
     pub fn load(project: &str) -> Result<Self> {
         let path = snapshot_path(project)?;

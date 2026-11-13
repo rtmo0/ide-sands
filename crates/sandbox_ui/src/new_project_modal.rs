@@ -1209,12 +1209,12 @@ impl Render for NewProjectModal {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    type TestResult = Result<(), Box<dyn std::error::Error>>;
+    pub(crate) type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    fn plan(name: &str, repositories: Vec<ProjectSource>) -> ProjectPlan {
+    pub(crate) fn plan(name: &str, repositories: Vec<ProjectSource>) -> ProjectPlan {
         ProjectPlan {
             name: name.to_string(),
             agent: "shell",
@@ -1229,7 +1229,7 @@ mod tests {
         }
     }
 
-    fn init_repository(path: &std::path::Path) -> TestResult {
+    pub(crate) fn init_repository(path: &std::path::Path) -> TestResult {
         if path.exists() {
             std::fs::remove_dir_all(path)?;
         }

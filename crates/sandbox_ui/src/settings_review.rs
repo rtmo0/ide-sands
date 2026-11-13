@@ -44,7 +44,7 @@ pub(crate) fn observe<T: 'static>(cx: &mut gpui::Context<T>) -> Subscription {
     cx.observe_global::<PendingSettingsChanges>(|_, cx| cx.notify())
 }
 
-fn set_pending_count(sandbox: &str, count: usize, cx: &mut App) {
+pub(crate) fn set_pending_count(sandbox: &str, count: usize, cx: &mut App) {
     let pending = cx.default_global::<PendingSettingsChanges>();
     if pending.0.get(sandbox).copied().unwrap_or(0) == count {
         return;

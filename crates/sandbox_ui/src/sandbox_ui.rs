@@ -33,6 +33,7 @@ use workspace::{
 
 mod agent_status;
 mod connections;
+mod delete_project;
 mod design;
 mod kubernetes_panel;
 mod kubernetes_view;

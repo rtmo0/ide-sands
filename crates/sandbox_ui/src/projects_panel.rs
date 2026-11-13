@@ -16,6 +16,7 @@ use workspace::{
 
 use crate::{
     connected_sandbox, connections,
+    delete_project::DeleteProjectModal,
     design::{Tone, caption, icon_button, primary_button, status_dot},
     list_sandboxes,
     new_project_modal::{NewProjectModal, agent_icon},
@@ -276,6 +277,8 @@ impl ProjectsPanel {
                 let labels = project_labels(project, cx);
                 let to_approve = settings_review::pending_count(&sandbox.name, cx);
                 let name = sandbox.name.clone();
+                let delete_info = sandbox.clone();
+                let workspace = self.workspace.clone();
                 let hover = colors.ghost_element_hover;
                 h_flex()
                     .id(("project", index))
@@ -292,6 +295,7 @@ impl ProjectsPanel {
                         cx.notify();
                         open_sandbox(name.clone(), None, OpenMode::Activate, window, cx)
                     }))
+                    .group("project-row")
                     .child(div().pt(px(5.)).child(status_dot(tone, cx)))
                     .child(
                         v_flex()
@@ -340,6 +344,41 @@ impl ProjectsPanel {
                                 )
                             })
                             .child(h_flex().pt_0p5().gap_1().flex_wrap().children(labels)),
+                    )
+                    .child(
+                        div()
+                            .invisible()
+                            .group_hover("project-row", |style| style.visible())
+                            .child(
+                                icon_button(
+                                    ("delete-project", index),
+                                    IconName::Trash,
+                                    if selected {
+                                        "Open another project to delete this one"
+                                    } else {
+                                        "Delete project…"
+                                    },
+                                )
+                                .disabled(selected)
+                                .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    let Some(workspace) = workspace.upgrade() else {
+                                        return;
+                                    };
+                                    let sandbox = delete_info.clone();
+                                    workspace.update(cx, |workspace, cx| {
+                                        let weak_workspace = cx.entity().downgrade();
+                                        workspace.toggle_modal(window, cx, |window, cx| {
+                                            DeleteProjectModal::new(
+                                                &sandbox,
+                                                weak_workspace,
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    });
+                                }),
+                            ),
                     )
             }))
     }
