@@ -87,8 +87,8 @@ Gemini, OpenCode) работают целиком в песочнице, с ча
 `project_connections.json` и императивное создание в `new_project_modal.rs`.
 
 Описание проекта — `.sands/project.yaml` в основном репозитории (см. ниже). На хосте:
-`<data_dir>/projects/<project-id>/` — связь с песочницей и путями репозиториев, `approved/`
-(одобренный снимок `.sands/` с хешами), ссылки на секреты, `audit.jsonl`, `usage.jsonl`.
+`<data_dir>/projects/<project-id>/` — `approved.json` (одобренный снимок `.sands/` каждого
+репозитория: хеш и текст файлов), дальше — ссылки на секреты, `audit.jsonl`, `usage.jsonl`.
 
 ```rust
 struct Project {

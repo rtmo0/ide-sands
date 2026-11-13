@@ -21,6 +21,7 @@ use crate::{
     new_project_modal::{NewProjectModal, agent_icon},
     open_sandbox,
     sbx_problem::{Problem, ProblemFixed, SbxProblemView, problem_view},
+    settings_review,
 };
 
 actions!(
@@ -89,6 +90,7 @@ pub struct ProjectsPanel {
     _refresh: Task<()>,
     _problem_subscription: Option<Subscription>,
     _connections_subscription: Subscription,
+    _settings_review_subscription: Subscription,
 }
 
 impl ProjectsPanel {
@@ -113,6 +115,7 @@ impl ProjectsPanel {
                     _refresh: Task::ready(()),
                     _problem_subscription: None,
                     _connections_subscription: connections::observe(cx),
+                    _settings_review_subscription: settings_review::observe(cx),
                 };
                 panel.refresh(window, cx);
                 panel
@@ -271,6 +274,7 @@ impl ProjectsPanel {
                     .map(|name| name.to_string_lossy().into_owned())
                     .collect::<Vec<_>>();
                 let labels = project_labels(project, cx);
+                let to_approve = settings_review::pending_count(&sandbox.name, cx);
                 let name = sandbox.name.clone();
                 let hover = colors.ghost_element_hover;
                 h_flex()
@@ -308,9 +312,20 @@ impl ProjectsPanel {
                                             })
                                             .truncate(),
                                     )
-                                    .children(last_used.filter(|_| !opening).map(|age| {
-                                        Label::new(age).size(LabelSize::XSmall).color(Color::Muted)
-                                    })),
+                                    .when(to_approve > 0, |this| {
+                                        this.child(
+                                            Label::new(format!("{to_approve} to approve"))
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Warning),
+                                        )
+                                    })
+                                    .when(to_approve == 0, |this| {
+                                        this.children(last_used.filter(|_| !opening).map(|age| {
+                                            Label::new(age)
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted)
+                                        }))
+                                    }),
                             )
                             .when(opening || !repositories.is_empty(), |this| {
                                 this.child(

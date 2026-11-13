@@ -189,6 +189,7 @@ members = [
     "crates/rpc",
     "crates/sandbox",
     "crates/sandbox_ui",
+    "crates/sands_project",
     "crates/sbx",
     "crates/tree_sitter_dart",
     "crates/scheduler",
@@ -467,6 +468,7 @@ rope = { path = "crates/rope" }
 rpc = { path = "crates/rpc" }
 sandbox = { path = "crates/sandbox" }
 sandbox_ui = { path = "crates/sandbox_ui" }
+sands_project = { path = "crates/sands_project" }
 sbx = { path = "crates/sbx" }
 scheduler = { path = "crates/scheduler" }
 search = { path = "crates/search" }

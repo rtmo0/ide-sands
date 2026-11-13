@@ -24,6 +24,7 @@ use workspace::{ModalView, Workspace};
 use crate::{
     connected_sandbox,
     design::{caption, primary_button, secondary_button},
+    settings_review,
 };
 
 actions!(
@@ -885,7 +886,21 @@ impl MigrationModal {
             .iter()
             .map(|(repository, items)| {
                 changes(repository, items, self.remove_originals)
-                    .map(|changes| apply_script(&repository.root, &changes))
+                    .map(|changes| {
+                        let written = changes
+                            .iter()
+                            .filter_map(|change| match change {
+                                Change::Write { path, .. } => Some(path.clone()),
+                                Change::CopyDirectory { to, .. } => Some(to.clone()),
+                                Change::Remove { .. } => None,
+                            })
+                            .collect::<Vec<_>>();
+                        (
+                            repository.root.clone(),
+                            apply_script(&repository.root, &changes),
+                            written,
+                        )
+                    })
                     .with_context(|| format!("preparing {}", repository.root))
             })
             .collect::<Result<Vec<_>>>();
@@ -903,13 +918,16 @@ impl MigrationModal {
         self._task = Some(cx.spawn(async move |this, cx| {
             let result = async {
                 let sbx = Sbx::locate()?;
-                for script in &scripts {
+                for (root, script, written) in &scripts {
                     let output = sbx.exec(&sandbox, &["bash", "-c", script.as_str()]).await?;
                     anyhow::ensure!(
                         output.status.success(),
                         "{}",
                         String::from_utf8_lossy(&output.stderr).trim()
                     );
+                    // The user chose these files in this dialog, so they don't wait for
+                    // approval like files an agent writes.
+                    settings_review::approve_written(&sbx, &sandbox, root, written).await?;
                 }
                 anyhow::Ok(())
             }

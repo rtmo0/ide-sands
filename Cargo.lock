@@ -15764,6 +15764,7 @@ dependencies = [
  "project",
  "recent_projects",
  "remote",
+ "sands_project",
  "sbx",
  "serde",
  "serde_json",
@@ -15986,6 +15987,22 @@ name = "sands_env_vars"
 version = "0.1.0"
 dependencies = [
  "env_var",
+]
+
+[[package]]
+name = "sands_project"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "log",
+ "paths",
+ "sbx",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "similar",
 ]
 
 [[package]]
