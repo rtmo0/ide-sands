@@ -5453,6 +5453,144 @@ async fn test_remote_context_server_receives_env_over_stdin(
     assert_eq!(first_message["method"], "initialize");
 }
 
+// Files in a remote worktree are written by whatever runs on the remote machine (in Sands, the
+// agents in the sandbox), so its `.zed/settings.json` must not be able to start a process on
+// the host.
+#[cfg(not(windows))]
+#[gpui::test]
+async fn test_remote_worktree_settings_do_not_start_context_servers(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    use project::project_settings::ProjectSettings;
+    use util::rel_path::RelPath;
+
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_path = output_dir.path().join("launch");
+    let args = stdio_launch_args(
+        &output_path,
+        r#"{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"planted","version":"1.0.0"}}"#,
+    );
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(
+        path!("/project"),
+        json!({
+            ".zed": {
+                "settings.json": json!({
+                    "context_servers": {
+                        "planted": { "command": "/bin/sh", "args": args }
+                    }
+                })
+                .to_string()
+            },
+            "code.rs": ""
+        }),
+    )
+    .await;
+    let (project, _headless_project) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/project"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+    cx.run_until_parked();
+
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    cx.update(|cx| {
+        let location = SettingsLocation {
+            worktree_id,
+            path: RelPath::empty(),
+        };
+        assert!(
+            ProjectSettings::get(Some(location), cx)
+                .context_servers
+                .contains_key("planted"),
+            "the remote worktree's settings should reach the host"
+        );
+    });
+
+    let store = project.read_with(cx, |project, _| project.context_server_store());
+    let configured = store.read_with(cx, |store, _| store.configured_server_ids());
+    assert!(
+        configured.iter().all(|id| id.0.as_ref() != "planted"),
+        "a context server from remote worktree settings must not be configured, got {configured:?}"
+    );
+    assert!(!output_path.exists());
+}
+
+#[cfg(not(windows))]
+#[gpui::test]
+async fn test_remote_project_does_not_run_local_stdio_context_server(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/project"), json!({})).await;
+    let (project, _headless_project) = init_test(&fs, cx, server_cx).await;
+    project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/project"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.executor().allow_parking();
+
+    let store = project.read_with(cx, |project, _| project.context_server_store());
+    let (status_tx, mut status_rx) = futures::channel::mpsc::unbounded();
+    let _subscription = cx.update(|cx| {
+        cx.subscribe(&store, move |_, event: &ServerStatusChangedEvent, _| {
+            status_tx.unbounded_send(event.status.clone()).ok();
+        })
+    });
+
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_path = output_dir.path().join("launch");
+    let args = stdio_launch_args(
+        &output_path,
+        r#"{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"local","version":"1.0.0"}}"#,
+    );
+    let settings = json!({
+        "context_servers": {
+            "local": { "source": "custom", "command": "/bin/sh", "args": args }
+        }
+    })
+    .to_string();
+    cx.update_global(|settings_store: &mut SettingsStore, cx| {
+        settings_store.set_user_settings(&settings, cx).unwrap();
+    });
+
+    let status = async {
+        while let Some(status) = status_rx.next().await {
+            if status != ContextServerStatus::Starting {
+                return Some(status);
+            }
+        }
+        None
+    }
+    .fuse();
+    let timeout = cx
+        .background_executor
+        .timer(std::time::Duration::from_secs(30))
+        .fuse();
+    futures::pin_mut!(status, timeout);
+    let status = futures::select! {
+        status = status => status,
+        _ = timeout => panic!("timed out waiting for the context server status"),
+    };
+    match status {
+        Some(ContextServerStatus::Error(message)) => assert!(
+            message.contains("remote"),
+            "the error should explain how to run the server remotely: {message}"
+        ),
+        other => panic!("expected the server to fail to start, got {other:?}"),
+    }
+    assert!(!output_path.exists());
+}
+
 #[gpui::test]
 async fn test_remote_apply_code_action_skips_unadvertised_command(
     cx: &mut TestAppContext,

@@ -951,6 +951,22 @@ impl ContextServerStore {
             (remote_state, this.is_remote_project())
         })?;
 
+        // In a remote project the host only talks to the remote machine; a command server
+        // started here would run with the user's own access to this computer.
+        if is_remote_project
+            && !needs_remote_command
+            && !matches!(
+                configuration.as_ref(),
+                ContextServerConfiguration::Http { .. }
+            )
+        {
+            anyhow::bail!(
+                "{} would run on this computer, but this project is remote. \
+                 Set \"remote\": true in its settings to run it on the remote machine.",
+                id.0
+            );
+        }
+
         let root_path: Option<Arc<Path>> =
             this.update(cx, |this, cx| this.resolve_root_path(cx))?;
 
@@ -1191,16 +1207,21 @@ impl ContextServerStore {
             return merged;
         }
         for worktree in visible_worktrees {
-            let worktree_id = worktree.read(cx).id();
-            let location = settings::SettingsLocation {
+            let worktree = worktree.read(cx);
+            // A remote worktree's settings files are written on the remote machine, where
+            // agents and the project's own code run. Letting them configure context servers
+            // would let that machine choose commands the host runs, so only user settings
+            // apply to remote worktrees.
+            let worktree_id = (!worktree.is_remote()).then(|| worktree.id());
+            let location = worktree_id.map(|worktree_id| settings::SettingsLocation {
                 worktree_id,
                 path: RelPath::empty(),
-            };
-            for (id, settings) in &ProjectSettings::get(Some(location), cx).context_servers {
+            });
+            for (id, settings) in &ProjectSettings::get(location, cx).context_servers {
                 merged
                     .entry(id.clone())
                     .or_insert_with(|| ContextServerSettingsEntry {
-                        worktree_id: Some(worktree_id),
+                        worktree_id,
                         settings: settings.clone(),
                     });
             }
