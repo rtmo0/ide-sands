@@ -207,6 +207,37 @@ fn parse_auto_compact_threshold(raw: &str) -> anyhow::Result<AutoCompactThreshol
     }
 }
 
+/// How expensive a model is, from the one that plans to the one that summarizes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTier {
+    Plan,
+    Work,
+    Fast,
+}
+
+/// The models behind each [`ModelTier`]; an unset tier falls back to the usual model choice.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModelTiers {
+    pub plan: Option<LanguageModelSelection>,
+    pub work: Option<LanguageModelSelection>,
+    pub fast: Option<LanguageModelSelection>,
+}
+
+impl ModelTiers {
+    pub fn get(&self, tier: ModelTier) -> Option<&LanguageModelSelection> {
+        match tier {
+            ModelTier::Plan => self.plan.as_ref(),
+            ModelTier::Work => self.work.as_ref(),
+            ModelTier::Fast => self.fast.as_ref(),
+        }
+    }
+
+    pub fn is_configured(&self) -> bool {
+        self.plan.is_some() || self.work.is_some() || self.fast.is_some()
+    }
+}
+
 #[derive(Clone, Debug, RegisterSetting)]
 pub struct AgentSettings {
     pub enabled: bool,
@@ -220,6 +251,7 @@ pub struct AgentSettings {
     pub max_content_width: Option<Pixels>,
     pub default_model: Option<LanguageModelSelection>,
     pub subagent_model: Option<LanguageModelSelection>,
+    pub model_tiers: ModelTiers,
     pub inline_assistant_model: Option<LanguageModelSelection>,
     pub inline_assistant_use_streaming_tools: bool,
     pub commit_message_model: Option<LanguageModelSelection>,
@@ -770,6 +802,15 @@ impl Settings for AgentSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         let agent = content.agent.clone().unwrap();
         let threads_sidebar = agent.threads_sidebar.unwrap();
+        let model_tiers = agent
+            .model_tiers
+            .clone()
+            .map(|tiers| ModelTiers {
+                plan: tiers.plan,
+                work: tiers.work,
+                fast: tiers.fast,
+            })
+            .unwrap_or_default();
         Self {
             enabled: agent.enabled.unwrap(),
             button: agent.button.unwrap(),
@@ -795,7 +836,8 @@ impl Settings for AgentSettings {
             },
             flexible: agent.flexible.unwrap(),
             default_model: Some(agent.default_model.unwrap()),
-            subagent_model: agent.subagent_model,
+            subagent_model: agent.subagent_model.or_else(|| model_tiers.work.clone()),
+            model_tiers: model_tiers.clone(),
             inline_assistant_model: agent.inline_assistant_model,
             inline_assistant_use_streaming_tools: agent
                 .inline_assistant_use_streaming_tools
@@ -803,10 +845,14 @@ impl Settings for AgentSettings {
             commit_message_include_project_rules: agent
                 .commit_message_include_project_rules
                 .unwrap(),
-            commit_message_model: agent.commit_message_model,
+            commit_message_model: agent
+                .commit_message_model
+                .or_else(|| model_tiers.fast.clone()),
             commit_message_instructions: agent.commit_message_instructions,
-            thread_summary_model: agent.thread_summary_model,
-            compaction_model: agent.compaction_model,
+            thread_summary_model: agent
+                .thread_summary_model
+                .or_else(|| model_tiers.fast.clone()),
+            compaction_model: agent.compaction_model.or_else(|| model_tiers.fast.clone()),
             inline_alternatives: agent.inline_alternatives.unwrap_or_default(),
             favorite_models: agent.favorite_models,
             default_profile: AgentProfileId(agent.default_profile.unwrap()),
@@ -814,7 +860,14 @@ impl Settings for AgentSettings {
                 .profiles
                 .unwrap()
                 .into_iter()
-                .map(|(key, val)| (AgentProfileId(key), val.into()))
+                .map(|(key, val)| {
+                    let mut profile: AgentProfileSettings = val.into();
+                    // The Plan profile runs on the plan tier unless it names its own model.
+                    if key.as_ref() == builtin_profiles::PLAN && profile.default_model.is_none() {
+                        profile.default_model = model_tiers.plan.clone();
+                    }
+                    (AgentProfileId(key), profile)
+                })
                 .collect(),
 
             notify_when_agent_waiting: agent.notify_when_agent_waiting.unwrap(),
@@ -1114,6 +1167,56 @@ mod tests {
                 "{content}"
             );
         }
+    }
+
+    #[gpui::test]
+    fn test_model_tiers_fill_in_unset_models(cx: &mut gpui::App) {
+        let store = SettingsStore::test(cx);
+        cx.set_global(store);
+        project::DisableAiSettings::register(cx);
+        AgentSettings::register(cx);
+        let model = |name: &str| format!(r#"{{ "provider": "fake", "model": "{name}" }}"#);
+        let content = format!(
+            r#"{{ "agent": {{
+                "model_tiers": {{ "plan": {plan}, "work": {work}, "fast": {fast} }},
+                "commit_message_model": {commit}
+            }} }}"#,
+            plan = model("big"),
+            work = model("medium"),
+            fast = model("small"),
+            commit = model("commits"),
+        );
+        SettingsStore::update_global(cx, |store, cx| {
+            store
+                .set_user_settings(&content, cx)
+                .expect("user settings should load");
+        });
+        let settings = AgentSettings::get_global(cx);
+        let name = |selection: &Option<LanguageModelSelection>| {
+            selection.as_ref().map(|selection| selection.model.clone())
+        };
+        assert_eq!(
+            name(&settings.thread_summary_model).as_deref(),
+            Some("small")
+        );
+        assert_eq!(name(&settings.compaction_model).as_deref(), Some("small"));
+        assert_eq!(
+            name(&settings.commit_message_model).as_deref(),
+            Some("commits")
+        );
+        assert_eq!(name(&settings.subagent_model).as_deref(), Some("medium"));
+        let plan_profile = settings
+            .profiles
+            .get(&AgentProfileId(builtin_profiles::PLAN.into()))
+            .expect("the Plan profile is built in");
+        assert_eq!(name(&plan_profile.default_model).as_deref(), Some("big"));
+        assert_eq!(
+            settings
+                .model_tiers
+                .get(ModelTier::Work)
+                .map(|selection| selection.model.as_str()),
+            Some("medium")
+        );
     }
 
     #[gpui::test]

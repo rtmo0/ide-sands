@@ -3653,8 +3653,12 @@ impl NativeThreadEnvironment {
         &self,
         label: String,
         model: Option<AgentModelId>,
+        role: Option<SubagentRole>,
         cx: &mut App,
     ) -> Result<Rc<dyn SubagentHandle>> {
+        let tiers = agent_settings::AgentSettings::get_global(cx)
+            .model_tiers
+            .clone();
         let model = if let Some(model_id) = model {
             let available = self.agent.read_with(cx, |agent, _| {
                 agent.models.model_from_id(&model_id).is_some()
@@ -3664,9 +3668,20 @@ impl NativeThreadEnvironment {
                     "Model {model_id} is unavailable. Call list_agents_and_models to inspect available models."
                 );
             }
-            Some(subagent_model_id_to_selection(&model_id, cx))
+            let selection = subagent_model_id_to_selection(&model_id, cx);
+            // The plan tier is the expensive model; subagents do the work on cheaper tiers.
+            if let Some(plan) = tiers.plan.as_ref()
+                && plan.provider == selection.provider
+                && plan.model == selection.model
+            {
+                anyhow::bail!(
+                    "{model_id} is the plan tier, which only the planner uses. Omit `model` and \
+                     pass a `role` instead."
+                );
+            }
+            Some(selection)
         } else {
-            None
+            role.and_then(|role| tiers.get(role.tier()).cloned())
         };
         let Some(parent_thread_entity) = self.thread.upgrade() else {
             anyhow::bail!("Parent thread no longer exists".to_string());
@@ -3684,6 +3699,12 @@ impl NativeThreadEnvironment {
 
         let subagent_thread: Entity<Thread> = cx.new(|cx| {
             let mut thread = Thread::new_subagent(&parent_thread_entity, model.as_ref(), cx);
+            if let Some(role) = role {
+                let profile = role.profile(thread.profile());
+                if &profile != thread.profile() {
+                    thread.set_profile(profile, cx);
+                }
+            }
             thread.set_title(label.into(), cx);
             thread
         });
@@ -3878,9 +3899,10 @@ impl ThreadEnvironment for NativeThreadEnvironment {
         &self,
         label: String,
         model: Option<AgentModelId>,
+        role: Option<SubagentRole>,
         cx: &mut App,
     ) -> Result<Rc<dyn SubagentHandle>> {
-        self.create_subagent_thread(label, model, cx)
+        self.create_subagent_thread(label, model, role, cx)
     }
 
     fn resume_subagent(
@@ -4498,6 +4520,7 @@ mod internal_tests {
                 environment.create_subagent_thread(
                     "subagent".to_string(),
                     Some(AgentModelId::from("fake-corp/subagent-model".to_string())),
+                    None,
                     cx,
                 )
             })
@@ -4513,6 +4536,112 @@ mod internal_tests {
             // intentionally filtered while the model selection is applied.
             assert_eq!(thread.speed(), None);
         });
+    }
+
+    #[gpui::test]
+    async fn test_subagent_roles_pick_their_tier_and_tools(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(path!("/test"), json!({})).await;
+        let project = Project::test(fs.clone(), [path!("/test").as_ref()], cx).await;
+        let thread_store = cx.new(|cx| ThreadStore::new(cx));
+        let agent = cx.update(|cx| NativeAgent::new(thread_store, Templates::new(), fs, cx));
+        let connection = Rc::new(NativeAgentConnection(agent.clone()));
+        let provider = Arc::new(FakeLanguageModelProvider::new(
+            LanguageModelProviderId::from("fake-corp".to_string()),
+            LanguageModelProviderName::from("Fake Corp".to_string()),
+        ));
+        let work_model = provider.update_model("work-model", |_| {});
+        let fast_model = provider.update_model("fast-model", |_| {});
+        provider.update_model("plan-model", |_| {});
+        cx.update(|cx| {
+            LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
+                registry.register_provider(provider, cx);
+            });
+        });
+        agent.update(cx, |agent, cx| agent.models.refresh_list(cx));
+
+        let selection = |model: &str| LanguageModelSelection {
+            provider: LanguageModelProviderSetting("fake-corp".to_string()),
+            model: model.to_string(),
+            enable_thinking: false,
+            effort: None,
+            speed: None,
+        };
+        let mut settings = cx.update(|cx| agent_settings::AgentSettings::get_global(cx).clone());
+        settings.model_tiers = agent_settings::ModelTiers {
+            plan: Some(selection("plan-model")),
+            work: Some(selection("work-model")),
+            fast: Some(selection("fast-model")),
+        };
+        cx.update(|cx| agent_settings::AgentSettings::override_global(settings, cx));
+
+        let acp_thread = cx
+            .update(|cx| connection.new_session(project, PathList::new(&[Path::new("/test")]), cx))
+            .await
+            .unwrap();
+        let session_id = acp_thread.read_with(cx, |thread, _| thread.session_id().clone());
+        let parent_thread = agent.read_with(cx, |agent, _| {
+            agent.sessions.get(&session_id).unwrap().thread.clone()
+        });
+        parent_thread.update(cx, |thread, cx| {
+            thread.set_profile(
+                agent_settings::AgentProfileId(agent_settings::builtin_profiles::PLAN.into()),
+                cx,
+            )
+        });
+        let environment = NativeThreadEnvironment {
+            agent: agent.downgrade(),
+            thread: parent_thread.downgrade(),
+            acp_thread: acp_thread.downgrade(),
+        };
+        let subagent = |role, cx: &mut TestAppContext| {
+            let handle = cx
+                .update(|cx| {
+                    environment.create_subagent_thread("subagent".to_string(), None, Some(role), cx)
+                })
+                .unwrap();
+            agent.read_with(cx, |agent, _| {
+                agent.sessions.get(&handle.id()).unwrap().thread.clone()
+            })
+        };
+
+        let worker = subagent(SubagentRole::Worker, cx);
+        worker.read_with(cx, |thread, _| {
+            assert_eq!(
+                thread.model().map(|model| model.id()),
+                Some(work_model.id())
+            );
+            assert_eq!(
+                thread.profile().as_str(),
+                agent_settings::builtin_profiles::WRITE
+            );
+        });
+        let reviewer = subagent(SubagentRole::Reviewer, cx);
+        reviewer.read_with(cx, |thread, _| {
+            assert_eq!(
+                thread.model().map(|model| model.id()),
+                Some(fast_model.id())
+            );
+            assert_eq!(
+                thread.profile().as_str(),
+                agent_settings::builtin_profiles::ASK
+            );
+        });
+
+        let plan_tier = cx.update(|cx| {
+            environment.create_subagent_thread(
+                "subagent".to_string(),
+                Some(AgentModelId::from("fake-corp/plan-model".to_string())),
+                Some(SubagentRole::Worker),
+                cx,
+            )
+        });
+        assert!(
+            plan_tier
+                .err()
+                .is_some_and(|error| error.to_string().contains("plan tier"))
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -9449,10 +9578,10 @@ mod internal_tests {
         };
 
         let first_subagent = cx
-            .update(|cx| environment.create_subagent_thread("first".to_string(), None, cx))
+            .update(|cx| environment.create_subagent_thread("first".to_string(), None, None, cx))
             .unwrap();
         let second_subagent = cx
-            .update(|cx| environment.create_subagent_thread("second".to_string(), None, cx))
+            .update(|cx| environment.create_subagent_thread("second".to_string(), None, None, cx))
             .unwrap();
         cx.run_until_parked();
 
@@ -9519,7 +9648,7 @@ mod internal_tests {
         };
 
         let child = cx
-            .update(|cx| environment.create_subagent_thread("child".to_string(), None, cx))
+            .update(|cx| environment.create_subagent_thread("child".to_string(), None, None, cx))
             .unwrap();
         cx.update(|cx| environment.resume_subagent_thread(child.id(), cx))
             .expect("resume the child");

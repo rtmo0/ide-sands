@@ -282,6 +282,11 @@ pub struct AgentSettingsContent {
     pub max_content_width: Option<crate::PixelSetting>,
     /// The default model to use when creating new chats and for other features when a specific model is not specified.
     pub default_model: Option<LanguageModelSelection>,
+    /// The models behind the cost tiers. Expensive models plan, cheaper ones do the work:
+    /// the Plan profile uses `plan`, subagents use `work` (and `fast` for explorers and
+    /// reviewers), and summaries, compaction and commit messages use `fast` unless their own
+    /// model is set.
+    pub model_tiers: Option<ModelTiersContent>,
     /// Model to use for subagents. Defaults to the parent thread's model and its
     /// thinking, effort, and speed settings when not specified. If the configured
     /// model is unavailable, the parent thread's model is used instead.
@@ -695,6 +700,17 @@ impl PlaySoundWhenAgentDone {
             PlaySoundWhenAgentDone::Always => true,
         }
     }
+}
+
+#[with_fallible_options]
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom, Debug, Default)]
+pub struct ModelTiersContent {
+    /// The expensive model that plans and replans.
+    pub plan: Option<LanguageModelSelection>,
+    /// The model that writes code and runs tests.
+    pub work: Option<LanguageModelSelection>,
+    /// The cheap model for searching, reviewing, summaries and commit messages.
+    pub fast: Option<LanguageModelSelection>,
 }
 
 #[with_fallible_options]

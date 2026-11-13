@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use acp_thread::AgentModelId;
 
-use crate::{AgentTool, ThreadEnvironment, ToolCallEventStream, ToolInput};
+use crate::{AgentTool, SubagentRole, ThreadEnvironment, ToolCallEventStream, ToolInput};
 
 /// Spawn a sub-agent for a well-scoped task.
 ///
@@ -31,6 +31,11 @@ use crate::{AgentTool, ThreadEnvironment, ToolCallEventStream, ToolInput};
 /// - Split implementation into disjoint codebase slices and spawn multiple agents for them in parallel when the write scopes do not overlap.
 /// - When a plan has multiple independent steps, prefer delegating those steps in parallel rather than serializing them unnecessarily.
 /// - Reuse the returned session_id when you want to follow up on the same delegated subproblem instead of creating a duplicate session.
+///
+/// ### Roles
+/// - Pass `role` for a new agent: `worker` changes code and runs commands, `explorer` reads and searches to answer a question, `reviewer` checks a change. The role picks the agent's model tier and tools.
+/// - Prefer `explorer` and `reviewer` for anything that does not change files: they run on the cheaper model.
+/// - A worker started from a read-only planner may edit files; explorers and reviewers never can.
 ///
 /// ### Model selection
 /// - When the user requests a particular model or asks you to choose based on cost or capability, call `list_agents_and_models` first, then pass the exact `models[].id` from the native Zed agent entry (`is_native: true`) in `model`.
@@ -57,6 +62,9 @@ pub struct SpawnAgentToolInput {
     /// Omit to preserve default behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// What the new agent is for: `worker`, `explorer` or `reviewer`. Omit when continuing a session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<SubagentRole>,
 }
 
 fn deserialize_session_id<'de, D>(deserializer: D) -> Result<Option<acp_v2::SessionId>, D::Error>
@@ -179,17 +187,25 @@ impl AgentTool for SpawnAgentTool {
                 message,
                 session_id,
                 model,
+                role,
             } = input;
             let (subagent, mut session_info) = cx.update(|cx| {
-                let subagent = match (session_id, model) {
-                    (Some(_), Some(_)) => Err(anyhow::anyhow!(
+                let subagent = match (session_id, model, role) {
+                    (Some(_), Some(_), _) => Err(anyhow::anyhow!(
                         "model cannot be changed when resuming a subagent session"
                     )),
-                    (Some(session_id), None) => self.environment.resume_subagent(session_id, cx),
-                    (None, model) => {
-                        self.environment
-                            .create_subagent(label, model.map(AgentModelId::from), cx)
+                    (Some(_), None, Some(_)) => Err(anyhow::anyhow!(
+                        "role cannot be changed when resuming a subagent session"
+                    )),
+                    (Some(session_id), None, None) => {
+                        self.environment.resume_subagent(session_id, cx)
                     }
+                    (None, model, role) => self.environment.create_subagent(
+                        label,
+                        model.map(AgentModelId::from),
+                        role,
+                        cx,
+                    ),
                 };
                 let subagent = subagent.map_err(|err| SpawnAgentToolOutput::Error {
                     session_id: None,

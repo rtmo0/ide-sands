@@ -803,6 +803,7 @@ pub trait ThreadEnvironment {
         &self,
         label: String,
         model: Option<AgentModelId>,
+        role: Option<SubagentRole>,
         cx: &mut App,
     ) -> Result<Rc<dyn SubagentHandle>>;
 
@@ -837,6 +838,82 @@ pub trait ThreadEnvironment {
         Err(anyhow::anyhow!(
             "Listing available agents is not supported in this environment"
         ))
+    }
+}
+
+/// What a subagent is for. The role picks its model tier and the tools it gets, so a planner
+/// that cannot change files hands edits to workers, and searching or reviewing runs on the cheap
+/// tier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentRole {
+    /// Changes code and runs commands, on the `work` tier.
+    Worker,
+    /// Reads and searches to answer a question, on the `fast` tier.
+    Explorer,
+    /// Reads a change and checks it, on the `fast` tier.
+    Reviewer,
+}
+
+impl SubagentRole {
+    pub fn tier(self) -> agent_settings::ModelTier {
+        match self {
+            SubagentRole::Worker => agent_settings::ModelTier::Work,
+            SubagentRole::Explorer | SubagentRole::Reviewer => agent_settings::ModelTier::Fast,
+        }
+    }
+
+    /// The profile a subagent in this role runs with. Roles never get more than the parent had,
+    /// except that a worker of the read-only Plan profile may edit: that is what workers are for.
+    pub fn profile(self, parent: &AgentProfileId) -> AgentProfileId {
+        let parent_can_write = parent.as_str() == agent_settings::builtin_profiles::WRITE
+            || parent.as_str() == agent_settings::builtin_profiles::PLAN;
+        match self {
+            SubagentRole::Worker if parent_can_write => {
+                AgentProfileId(agent_settings::builtin_profiles::WRITE.into())
+            }
+            SubagentRole::Worker => parent.clone(),
+            SubagentRole::Explorer | SubagentRole::Reviewer => {
+                if parent.as_str() == agent_settings::builtin_profiles::MINIMAL {
+                    parent.clone()
+                } else {
+                    AgentProfileId(agent_settings::builtin_profiles::ASK.into())
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod subagent_role_tests {
+    use super::*;
+    use agent_settings::builtin_profiles::{ASK, MINIMAL, PLAN, WRITE};
+
+    fn profile(id: &str) -> AgentProfileId {
+        AgentProfileId(id.into())
+    }
+
+    #[test]
+    fn roles_never_gain_more_than_the_parent_except_workers_of_the_planner() {
+        assert_eq!(SubagentRole::Worker.profile(&profile(PLAN)), profile(WRITE));
+        assert_eq!(
+            SubagentRole::Worker.profile(&profile(WRITE)),
+            profile(WRITE)
+        );
+        assert_eq!(SubagentRole::Worker.profile(&profile(ASK)), profile(ASK));
+        assert_eq!(
+            SubagentRole::Worker.profile(&profile(MINIMAL)),
+            profile(MINIMAL)
+        );
+        assert_eq!(
+            SubagentRole::Explorer.profile(&profile(WRITE)),
+            profile(ASK)
+        );
+        assert_eq!(SubagentRole::Reviewer.profile(&profile(PLAN)), profile(ASK));
+        assert_eq!(
+            SubagentRole::Reviewer.profile(&profile(MINIMAL)),
+            profile(MINIMAL)
+        );
     }
 }
 
