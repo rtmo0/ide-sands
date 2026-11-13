@@ -38,6 +38,7 @@ mod kubernetes_panel;
 mod kubernetes_view;
 mod new_project_modal;
 mod projects_panel;
+mod provisioning;
 mod sandbox_panel;
 mod sbx_problem;
 mod settings_migration;

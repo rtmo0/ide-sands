@@ -35,6 +35,7 @@ sands_project.workspace = true
 sbx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 settings.workspace = true
 sysinfo.workspace = true
 task.workspace = true

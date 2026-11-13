@@ -4,7 +4,7 @@ use gpui::{
     App, AppContext as _, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     PathPromptOptions, SharedString, Subscription, Task, WeakEntity,
 };
-use sbx::{CreateOptions, NetworkMode, Sbx};
+use sbx::{NetworkMode, Sbx};
 use ui::{Headline, HeadlineSize, Toggleable as _, prelude::*};
 use ui_input::InputField;
 use util::ResultExt as _;
@@ -18,6 +18,7 @@ use crate::{
     },
     open_sandbox,
     projects_panel::ProjectsPanel,
+    provisioning::{self, ProvisionStep, Provisioned, StepState},
     sandbox_panel::parse_port_mapping,
 };
 
@@ -35,13 +36,13 @@ enum SourceKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum ProjectSource {
+pub(crate) enum ProjectSource {
     LocalRepository(PathBuf),
     GitUrl(String),
 }
 
 impl ProjectSource {
-    fn display(&self) -> String {
+    pub(crate) fn display(&self) -> String {
         match self {
             ProjectSource::LocalRepository(path) => path.to_string_lossy().into_owned(),
             ProjectSource::GitUrl(url) => url.clone(),
@@ -49,38 +50,59 @@ impl ProjectSource {
     }
 
     /// The folder a clone of the repository gets inside the sandbox workspace.
-    fn clone_directory_name(&self) -> Option<String> {
+    pub(crate) fn clone_directory_name(&self) -> Option<String> {
         repository_directory_name(&self.display())
+    }
+
+    /// The repository's folder or URL basename, for progress messages.
+    pub(crate) fn short_name(&self) -> String {
+        match self {
+            ProjectSource::LocalRepository(path) => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| self.display()),
+            ProjectSource::GitUrl(url) => {
+                repository_directory_name(url).unwrap_or_else(|| url.clone())
+            }
+        }
     }
 }
 
 /// The first local repository becomes the sandbox workspace instead of being cloned into it.
-fn primary_repository(repositories: &[ProjectSource]) -> Option<usize> {
+pub(crate) fn primary_repository(repositories: &[ProjectSource]) -> Option<usize> {
     repositories
         .iter()
         .position(|source| matches!(source, ProjectSource::LocalRepository(_)))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct SandboxSettings {
-    network_mode: NetworkMode,
-    allowed_hosts: Vec<String>,
-    cpus: Option<u32>,
-    memory: Option<String>,
-    publish: Vec<String>,
+pub(crate) struct SandboxSettings {
+    pub network_mode: NetworkMode,
+    pub allowed_hosts: Vec<String>,
+    pub cpus: Option<u32>,
+    pub memory: Option<String>,
+    pub publish: Vec<String>,
 }
 
-struct ProjectPlan {
-    name: String,
-    agent: &'static str,
-    settings: SandboxSettings,
-    repositories: Vec<ProjectSource>,
+#[derive(Clone, Debug)]
+pub(crate) struct ProjectPlan {
+    pub name: String,
+    pub agent: &'static str,
+    pub settings: SandboxSettings,
+    pub repositories: Vec<ProjectSource>,
 }
 
 enum CreationState {
     Editing,
     Creating(SharedString),
     Failed(SharedString),
+}
+
+/// The project being set up, step by step.
+struct Provisioning {
+    plan: ProjectPlan,
+    steps: Vec<ProvisionStep>,
+    provisioned: Provisioned,
 }
 
 pub(crate) struct NewProjectModal {
@@ -100,6 +122,7 @@ pub(crate) struct NewProjectModal {
     git_url: Entity<InputField>,
     agent: usize,
     state: CreationState,
+    provisioning: Option<Provisioning>,
     _task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -222,6 +245,7 @@ impl NewProjectModal {
             git_url,
             agent: 0,
             state: CreationState::Editing,
+            provisioning: None,
             _task: None,
             _subscriptions,
         }
@@ -389,190 +413,193 @@ impl NewProjectModal {
             return self.fail("Choose an agent", cx);
         };
         let plan = ProjectPlan {
-            name: name.clone(),
+            name,
             agent,
             settings,
             repositories: self.repositories.clone(),
         };
 
-        self.state = CreationState::Creating("Creating the sandbox and fetching the code…".into());
+        self.provisioning = Some(Provisioning {
+            steps: provisioning::steps(&plan),
+            plan,
+            provisioned: Provisioned::default(),
+        });
+        self.run_provisioning(window, cx);
+    }
+
+    /// Runs every step from the first; steps whose work is already done skip themselves, so this
+    /// also retries after a failure.
+    fn run_provisioning(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(provisioning) = self.provisioning.as_mut() else {
+            return;
+        };
+        for step in &mut provisioning.steps {
+            step.state = StepState::Waiting;
+        }
+        let plan = provisioning.plan.clone();
+        let kinds = provisioning
+            .steps
+            .iter()
+            .map(|step| step.kind.clone())
+            .collect::<Vec<_>>();
+        let mut provisioned = provisioning.provisioned.clone();
+        self.state = CreationState::Creating("Setting up the project…".into());
         cx.notify();
         self._task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = cx.background_spawn(create_project(plan)).await;
-            match result {
-                Ok(directory) => {
-                    set_up_toolchains(&this, &name, cx).await;
-                    this.update_in(cx, |this, window, cx| {
-                        if let Some(workspace) = this.workspace.upgrade()
-                            && let Some(panel) = workspace.read(cx).panel::<ProjectsPanel>(cx)
-                        {
-                            panel.update(cx, |panel, cx| panel.refresh(window, cx));
-                        }
-                        cx.emit(DismissEvent);
-                        open_sandbox(name, Some(directory), OpenMode::Activate, window, cx);
-                    })
-                    .log_err();
-                }
+            let sbx = match Sbx::locate() {
+                Ok(sbx) => sbx,
                 Err(error) => {
-                    this.update(cx, |this, cx| this.fail(format!("{error:#}"), cx))
+                    this.update(cx, |this, cx| this.fail(error.to_string(), cx))
                         .log_err();
+                    return;
+                }
+            };
+            for (index, kind) in kinds.into_iter().enumerate() {
+                this.update(cx, |this, cx| {
+                    this.set_step_state(index, StepState::Running, cx)
+                })
+                .log_err();
+                let (result, updated) = cx
+                    .background_spawn({
+                        let sbx = sbx.clone();
+                        let plan = plan.clone();
+                        let mut provisioned = provisioned.clone();
+                        async move {
+                            let result =
+                                provisioning::run_step(&sbx, &plan, &kind, &mut provisioned).await;
+                            (result, provisioned)
+                        }
+                    })
+                    .await;
+                provisioned = updated;
+                let failed = result.is_err();
+                let state =
+                    result.unwrap_or_else(|error| StepState::Failed(format!("{error:#}").into()));
+                let saved = provisioned.clone();
+                this.update(cx, |this, cx| {
+                    if let Some(provisioning) = this.provisioning.as_mut() {
+                        provisioning.provisioned = saved;
+                    }
+                    this.set_step_state(index, state, cx);
+                    if failed {
+                        this.fail(
+                            "Setting up the project stopped. Fix the problem and retry, or \
+                             remove the sandbox.",
+                            cx,
+                        );
+                    }
+                })
+                .log_err();
+                if failed {
+                    return;
                 }
             }
+            let directory = provisioned.directory();
+            this.update_in(cx, |this, window, cx| {
+                if let Some(workspace) = this.workspace.upgrade()
+                    && let Some(panel) = workspace.read(cx).panel::<ProjectsPanel>(cx)
+                {
+                    panel.update(cx, |panel, cx| panel.refresh(window, cx));
+                }
+                cx.emit(DismissEvent);
+                open_sandbox(plan.name.clone(), directory, OpenMode::Activate, window, cx);
+            })
+            .log_err();
         }));
     }
-}
 
-/// Installs the toolchains the project's files call for. A failure does not block opening the
-/// project: the Sandbox panel lists what is missing and can retry.
-async fn set_up_toolchains(
-    this: &WeakEntity<NewProjectModal>,
-    name: &str,
-    cx: &mut gpui::AsyncWindowContext,
-) {
-    let probe_name = name.to_string();
-    let missing = cx
-        .background_spawn(async move {
-            let sbx = Sbx::locate()?;
-            let probe = sbx.probe(&probe_name).await?;
-            anyhow::Ok(
-                probe
-                    .toolchains
-                    .into_iter()
-                    .filter(|status| status.is_missing())
-                    .map(|status| status.toolchain)
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .await
-        .log_err()
-        .unwrap_or_default();
-    if missing.is_empty() {
-        return;
+    fn set_step_state(&mut self, index: usize, state: StepState, cx: &mut Context<Self>) {
+        if let Some(step) = self
+            .provisioning
+            .as_mut()
+            .and_then(|provisioning| provisioning.steps.get_mut(index))
+        {
+            step.state = state;
+            cx.notify();
+        }
     }
-    let names = missing
-        .iter()
-        .map(|toolchain| toolchain.display_name())
-        .collect::<Vec<_>>()
-        .join(", ");
-    this.update(cx, |this, cx| {
-        this.state = CreationState::Creating(
-            format!("Installing {names}. This can take a few minutes…").into(),
-        );
+
+    /// Removes the sandbox this creation made and goes back to the settings.
+    fn remove_sandbox(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(provisioning) = self.provisioning.as_ref() else {
+            return;
+        };
+        if !provisioning.provisioned.created_sandbox {
+            self.provisioning = None;
+            self.state = CreationState::Editing;
+            cx.notify();
+            return;
+        }
+        let name = provisioning.plan.name.clone();
+        self.state = CreationState::Creating(format!("Removing sandbox {name}…").into());
         cx.notify();
-    })
-    .log_err();
-    let install_name = name.to_string();
-    cx.background_spawn(async move {
-        let sbx = Sbx::locate()?;
-        sbx.install_toolchains(&install_name, &missing).await?;
-        anyhow::Ok(())
-    })
-    .await
-    .log_err();
-}
-
-/// Creates the sandbox with its network policy, brings every repository into it and returns
-/// the directory to open. The first local repository becomes the sandbox workspace, a private
-/// clone whose commits reach the host through the `sandbox-<name>` remote. Other local
-/// repositories are mounted read-only and cloned inside, like Git URLs, so the sandbox cannot
-/// write to the host.
-async fn create_project(plan: ProjectPlan) -> anyhow::Result<String> {
-    let sbx = Sbx::locate()?;
-    sbx.check().await?;
-    for source in &plan.repositories {
-        if let ProjectSource::LocalRepository(path) = source {
-            anyhow::ensure!(
-                path.is_absolute() && path.is_dir(),
-                "{} is not a folder",
-                path.display()
-            );
-            anyhow::ensure!(
-                path.join(".git").exists(),
-                "{} is not a Git repository. Run `git init` in it first.",
-                path.display()
-            );
-        }
+        self._task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { Sbx::locate()?.remove(&name).await })
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok(()) => {
+                    this.provisioning = None;
+                    this.state = CreationState::Editing;
+                    cx.notify();
+                }
+                Err(error) => this.fail(format!("Removing the sandbox failed: {error}"), cx),
+            })
+            .log_err();
+        }));
     }
-    sbx.scope_network_policy_to_sandboxes().await?;
 
-    let primary = primary_repository(&plan.repositories);
-    let (workspaces, read_only_workspaces) = plan
-        .repositories
-        .iter()
-        .enumerate()
-        .filter_map(|(index, source)| match source {
-            ProjectSource::LocalRepository(path) => Some((index, path.clone())),
-            ProjectSource::GitUrl(_) => None,
-        })
-        .partition::<Vec<_>, _>(|(index, _)| Some(*index) == primary);
-    let settings = &plan.settings;
-    sbx.create(&CreateOptions {
-        name: plan.name.clone(),
-        agent: plan.agent.to_string(),
-        workspaces: workspaces.into_iter().map(|(_, path)| path).collect(),
-        clone_workspace: primary.is_some(),
-        read_only_workspaces: read_only_workspaces
-            .into_iter()
-            .map(|(_, path)| path)
-            .collect(),
-        publish: settings.publish.clone(),
-        cpus: settings.cpus,
-        memory: settings.memory.clone(),
-        ..Default::default()
-    })
-    .await?;
-
-    match set_up_project(&sbx, &plan, primary).await {
-        Ok(directory) => Ok(directory),
-        Err(error) => {
-            // The sandbox exists only for this project, so a half-configured one is removed
-            // and the user can fix the settings and create it again.
-            match sbx.remove(&plan.name).await {
-                Ok(()) => Err(error),
-                Err(remove_error) => Err(anyhow::anyhow!(
-                    "{error:#}. Removing sandbox {} also failed: {remove_error}",
-                    plan.name
-                )),
-            }
-        }
+    fn render_provisioning(&self, provisioning: &Provisioning) -> impl IntoElement {
+        v_flex()
+            .gap_1()
+            .children(provisioning.steps.iter().map(|step| {
+                let (icon, color) = match &step.state {
+                    StepState::Waiting => (IconName::Circle, Color::Muted),
+                    StepState::Running => (IconName::ArrowCircle, Color::Accent),
+                    StepState::Done(_) => (IconName::Check, Color::Success),
+                    StepState::Skipped(_) => (IconName::Dash, Color::Muted),
+                    StepState::Warning(_) => (IconName::Warning, Color::Warning),
+                    StepState::Failed(_) => (IconName::XCircle, Color::Error),
+                };
+                let detail = match &step.state {
+                    StepState::Done(detail) => detail.clone(),
+                    StepState::Skipped(detail)
+                    | StepState::Warning(detail)
+                    | StepState::Failed(detail) => Some(detail.clone()),
+                    StepState::Waiting | StepState::Running => None,
+                };
+                let detail_color = match &step.state {
+                    StepState::Failed(_) => Color::Error,
+                    StepState::Warning(_) => Color::Warning,
+                    _ => Color::Muted,
+                };
+                h_flex()
+                    .py_1p5()
+                    .gap_3()
+                    .items_start()
+                    .child(
+                        div()
+                            .pt_0p5()
+                            .child(Icon::new(icon).size(IconSize::Small).color(color)),
+                    )
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .child(Label::new(step.label.clone()).size(LabelSize::Small).color(
+                                if step.state == StepState::Waiting {
+                                    Color::Muted
+                                } else {
+                                    Color::Default
+                                },
+                            ))
+                            .children(detail.map(|detail| {
+                                Label::new(detail)
+                                    .size(LabelSize::Small)
+                                    .color(detail_color)
+                            })),
+                    )
+            }))
     }
-}
-
-async fn set_up_project(
-    sbx: &Sbx,
-    plan: &ProjectPlan,
-    primary: Option<usize>,
-) -> anyhow::Result<String> {
-    let settings = &plan.settings;
-    sbx.apply_network_mode(&plan.name, settings.network_mode, &settings.allowed_hosts)
-        .await?;
-    let workspace = sbx.default_directory(&plan.name).await?;
-    let mut directories = Vec::new();
-    if primary.is_some() {
-        directories.push(workspace.clone());
-    }
-    for (index, source) in plan.repositories.iter().enumerate() {
-        if Some(index) == primary {
-            continue;
-        }
-        match sbx.clone_repository(&plan.name, &source.display()).await {
-            Ok(directory) => directories.push(directory),
-            Err(error)
-                if matches!(source, ProjectSource::GitUrl(_))
-                    && settings.network_mode != NetworkMode::AllowAll =>
-            {
-                anyhow::bail!(
-                    "{error}. If the host is blocked, allow it in the project's network settings."
-                )
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-    // Other repositories are cloned inside the workspace, so it holds all of them.
-    Ok(match directories.as_slice() {
-        [single] => single.clone(),
-        _ => workspace,
-    })
 }
 
 fn split_list(text: &str) -> Vec<String> {
@@ -1081,11 +1108,13 @@ impl Render for NewProjectModal {
             Step::Repositories => 1,
             Step::Agent => 2,
         };
-        let body = match self.step {
-            Step::Sandbox => self.render_sandbox_step(cx).into_any_element(),
-            Step::Repositories => self.render_repositories_step(cx).into_any_element(),
-            Step::Agent => self.render_agent_step(cx).into_any_element(),
+        let body = match (&self.provisioning, self.step) {
+            (Some(provisioning), _) => self.render_provisioning(provisioning).into_any_element(),
+            (None, Step::Sandbox) => self.render_sandbox_step(cx).into_any_element(),
+            (None, Step::Repositories) => self.render_repositories_step(cx).into_any_element(),
+            (None, Step::Agent) => self.render_agent_step(cx).into_any_element(),
         };
+        let provisioning_stopped = self.provisioning.is_some() && !creating;
         let first_step = self.step == Step::Sandbox;
         let last_step = self.step == Step::Agent;
         let colors = cx.theme().colors();
@@ -1138,27 +1167,43 @@ impl Render for NewProjectModal {
                     .border_t_1()
                     .border_color(colors.border_variant)
                     .child(div().flex_1().min_w_0().children(status))
-                    .child(if first_step {
-                        Button::new("cancel-new-project", "Cancel")
-                            .disabled(creating)
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent)))
-                    } else {
-                        Button::new("back-new-project", "Back")
-                            .disabled(creating)
-                            .on_click(cx.listener(|this, _, window, cx| this.back(window, cx)))
-                    })
-                    .child(
-                        primary_button(
-                            "next-new-project",
-                            if last_step {
-                                "Create Project"
-                            } else {
-                                "Continue"
-                            },
+                    .when(provisioning_stopped, |this| {
+                        this.child(
+                            Button::new("remove-new-project", "Remove sandbox").on_click(
+                                cx.listener(|this, _, window, cx| this.remove_sandbox(window, cx)),
+                            ),
                         )
-                        .disabled(creating)
-                        .on_click(cx.listener(|this, _, window, cx| this.next(window, cx))),
-                    ),
+                        .child(
+                            primary_button("retry-new-project", "Retry").on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.run_provisioning(window, cx)
+                                }),
+                            ),
+                        )
+                    })
+                    .when(!provisioning_stopped, |this| {
+                        this.child(if first_step {
+                            Button::new("cancel-new-project", "Cancel")
+                                .disabled(creating)
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent)))
+                        } else {
+                            Button::new("back-new-project", "Back")
+                                .disabled(creating)
+                                .on_click(cx.listener(|this, _, window, cx| this.back(window, cx)))
+                        })
+                        .child(
+                            primary_button(
+                                "next-new-project",
+                                if last_step {
+                                    "Create Project"
+                                } else {
+                                    "Continue"
+                                },
+                            )
+                            .disabled(creating)
+                            .on_click(cx.listener(|this, _, window, cx| this.next(window, cx))),
+                        )
+                    }),
             )
     }
 }
@@ -1222,18 +1267,24 @@ mod tests {
         smol::block_on(async {
             let sbx = Sbx::locate()?;
 
-            let directory = create_project(plan(
+            let directory = provisioning::provision(&plan(
                 "sands-test-git",
                 vec![ProjectSource::GitUrl(
                     "https://github.com/octocat/Hello-World.git".to_string(),
                 )],
             ))
             .await;
+            let directory = match directory {
+                Ok(directory) => directory,
+                Err(error) => {
+                    if let Err(remove_error) = sbx.remove("sands-test-git").await {
+                        eprintln!("cleaning up sands-test-git failed: {remove_error}");
+                    }
+                    return Err(error.into());
+                }
+            };
             let listing = sbx
-                .exec(
-                    "sands-test-git",
-                    &["ls", directory.as_deref().unwrap_or("/")],
-                )
+                .exec("sands-test-git", &["ls", directory.as_str()])
                 .await;
             let blocked = sbx
                 .exec(
@@ -1251,7 +1302,6 @@ mod tests {
                 .await;
             let ports = sbx.ports("sands-test-git").await;
             sbx.remove("sands-test-git").await?;
-            let directory = directory?;
             assert!(directory.ends_with("/Hello-World"), "{directory}");
             assert!(String::from_utf8_lossy(&listing?.stdout).contains("README"));
             assert_eq!(String::from_utf8_lossy(&blocked?.stdout), "403");
@@ -1265,7 +1315,7 @@ mod tests {
             let primary = primary.canonicalize()?;
             let secondary = secondary.canonicalize()?;
 
-            let directory = create_project(plan(
+            let directory = provisioning::provision(&plan(
                 "sands-test-local",
                 vec![
                     ProjectSource::LocalRepository(primary.clone()),
@@ -1298,9 +1348,17 @@ mod tests {
             std::fs::remove_dir_all(&root)?;
             assert_eq!(directory?, primary.to_string_lossy());
             assert_eq!(String::from_utf8_lossy(&nested_listing?.stdout), "local\n");
-            assert_eq!(String::from_utf8_lossy(&status?.stdout), "");
+            // The nested clone stays out of the workspace's status; only the project settings
+            // Sands just wrote are new.
+            assert_eq!(String::from_utf8_lossy(&status?.stdout), "?? .sands/\n");
             assert!(!host_write?.status.success());
             assert!(host_untouched);
+            for project in ["sands-test-git", "sands-test-local"] {
+                let snapshot = paths::data_dir().join("projects").join(project);
+                if snapshot.exists() {
+                    std::fs::remove_dir_all(snapshot)?;
+                }
+            }
             Ok(())
         })
     }
