@@ -10,7 +10,7 @@ use util::command::new_command;
 
 /// `sbx` is a closed-source CLI whose interface has already changed once
 /// (`docker sandbox` → `sbx`), so Sands only drives versions it was tested against.
-pub const SUPPORTED_VERSIONS: &str = ">=0.50.0, <0.51.0";
+pub const SUPPORTED_VERSIONS: &str = ">=0.50.0, <0.52.0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SbxError {
@@ -1929,12 +1929,13 @@ mod tests {
     fn checks_supported_versions() {
         assert!(ensure_supported_version("v0.50.1").is_ok());
         assert!(ensure_supported_version("0.50.0").is_ok());
+        assert!(ensure_supported_version("v0.51.0").is_ok());
         assert!(matches!(
             ensure_supported_version("v0.49.9"),
             Err(SbxError::UnsupportedVersion { .. })
         ));
         assert!(matches!(
-            ensure_supported_version("v0.51.0"),
+            ensure_supported_version("v0.52.0"),
             Err(SbxError::UnsupportedVersion { .. })
         ));
         assert!(matches!(

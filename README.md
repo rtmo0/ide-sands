@@ -72,7 +72,7 @@ Requirements on macOS:
 - Xcode with the Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`)
 - [rustup](https://rustup.rs) (the toolchain version is pinned in `rust-toolchain.toml`)
 - `zig` and `cargo-zigbuild`, used by development builds to cross-compile the remote server that runs in sandboxes
-- [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`) 0.50.x, signed in with `sbx login`
+- [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`) 0.50 or 0.51, signed in with `sbx login`
 
 ```sh
 cargo run            # development build
