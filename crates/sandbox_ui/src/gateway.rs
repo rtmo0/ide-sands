@@ -88,6 +88,20 @@ pub(crate) fn init(cx: &mut App) {
         }
     })
     .detach();
+    // Without Sands there is no gateway, so Claude Code goes back to the API directly; opening
+    // the project points it at the gateway again.
+    cx.on_app_quit(|cx| {
+        if let Some(state) = cx.try_global::<GatewayState>()
+            && !state.tokens.is_empty()
+            && let Some(sbx) = Sbx::locate().log_err()
+        {
+            for sandbox in state.tokens.keys() {
+                sbx.reset_claude_in_background(sandbox).log_err();
+            }
+        }
+        async {}
+    })
+    .detach();
 }
 
 /// The sandbox proxy sees requests to `host.docker.internal` as going to `localhost`, so that is
@@ -272,10 +286,23 @@ mod tests {
                 let settings = sbx
                     .exec(name, &["sh", "-c", "cat \"$HOME/.claude/settings.json\""])
                     .await?;
+                sbx.reset_claude_in_background(name)?;
+                let mut reset = String::new();
+                for _ in 0..30 {
+                    smol::Timer::after(std::time::Duration::from_secs(1)).await;
+                    let output = sbx
+                        .exec(name, &["sh", "-c", "cat \"$HOME/.claude/settings.json\""])
+                        .await?;
+                    reset = String::from_utf8_lossy(&output.stdout).into_owned();
+                    if !reset.contains("ANTHROPIC_BASE_URL") {
+                        break;
+                    }
+                }
                 anyhow::Ok((
                     allowed,
                     refused,
                     String::from_utf8_lossy(&settings.stdout).into_owned(),
+                    reset,
                 ))
             }
             .await;
@@ -286,10 +313,11 @@ mod tests {
             if snapshot.exists() {
                 fs::remove_dir_all(snapshot)?;
             }
-            let (allowed, refused, settings) = result?;
+            let (allowed, refused, settings, reset) = result?;
             assert_eq!(allowed, "200");
             assert_eq!(refused, "403");
             assert!(settings.contains(&base_url), "{settings}");
+            assert!(!reset.contains("ANTHROPIC_BASE_URL"), "{reset}");
             Ok(())
         })
     }

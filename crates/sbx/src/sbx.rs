@@ -1208,6 +1208,32 @@ impl Sbx {
         }
     }
 
+    /// Starts pointing Claude Code in the sandbox back at the Anthropic API and returns at once.
+    /// The `sbx` process is not tied to this one, so it finishes even while Sands is quitting.
+    pub fn reset_claude_in_background(&self, name: &str) -> Result<(), SbxError> {
+        let arguments = [
+            "exec",
+            name,
+            "bash",
+            "-c",
+            CLAUDE_GATEWAY_INSTALLER,
+            "sands",
+            "",
+        ];
+        // Dropping the child does not stop it: `kill_on_drop` is off.
+        new_command(&self.executable)
+            .args(arguments)
+            .stdin(util::command::Stdio::null())
+            .stdout(util::command::Stdio::null())
+            .stderr(util::command::Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|source| SbxError::Spawn {
+                command: display_command(&arguments[..2]),
+                source,
+            })
+    }
+
     /// Installs toolchains inside the sandbox. This can take minutes (Flutter alone is close to
     /// a gigabyte), so callers should show progress.
     pub async fn install_toolchains(
