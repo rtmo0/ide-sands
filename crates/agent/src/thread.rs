@@ -4,7 +4,8 @@ use crate::{
     DiagnosticsTool, EditFileTool, FetchTool, FindPathTool, FindReferencesTool, GetCodeActionsTool,
     GoToDefinitionTool, GrepTool, ListAgentsAndModelsTool, ListDirectoryTool, MovePathTool,
     ProjectSnapshot, ReadFileTool, RenameTool, SandboxedTerminalTool, SpawnAgentTool,
-    SystemPromptTemplate, Template, Templates, TerminalTool, ToolPermissionDecision, WebSearchTool,
+    SystemPromptTemplate, Template, Templates, TerminalTool, ToolPermissionDecision, UpdatePlanTool,
+    WebSearchTool,
     WriteFileTool, decide_permission_from_settings,
 };
 use acp_thread::{AgentModelId, ClientUserMessageId, MentionUri, ProcessOutput};
@@ -1001,6 +1002,8 @@ pub enum ThreadEvent {
     Retry(acp_thread::RetryStatus),
     ContextCompaction(acp_thread::ContextCompaction),
     ContextCompactionUpdate(acp_thread::ContextCompactionUpdate),
+    /// The whole current plan, replacing the last one.
+    Plan(Vec<acp_v2::PlanEntry>),
     Stop(acp_v2::StopReason),
 }
 
@@ -2353,6 +2356,7 @@ impl Thread {
         self.add_tool(WebSearchTool);
 
         self.add_tool(AskUserTool);
+        self.add_tool(UpdatePlanTool);
 
         self.add_tool(DiagnosticsTool::new(self.project.clone()));
 
@@ -5790,6 +5794,12 @@ impl ThreadEventStream {
             .ok();
     }
 
+    fn send_plan(&self, entries: Vec<acp_v2::PlanEntry>) {
+        self.sender
+            .unbounded_send(Ok(ThreadEvent::Plan(entries)))
+            .ok();
+    }
+
     fn send_text(&self, text: &str) {
         self.sender
             .unbounded_send(Ok(ThreadEvent::AgentText(text.to_string())))
@@ -6112,6 +6122,11 @@ impl ToolCallEventStream {
     /// The ACP-facing id for this tool call (see [`scoped_tool_call_id`]).
     pub fn tool_call_id(&self) -> &acp_v2::ToolCallId {
         &self.tool_call_id
+    }
+
+    /// Shows `entries` as the thread's plan, replacing the one before.
+    pub fn update_plan(&self, entries: Vec<acp_v2::PlanEntry>) {
+        self.stream.send_plan(entries);
     }
 
     pub fn update_fields(
@@ -7144,6 +7159,15 @@ impl ToolCallEventStreamReceiver {
             request
         } else {
             panic!("Expected Elicitation but got: {:?}", event);
+        }
+    }
+
+    pub async fn expect_plan(&mut self) -> Vec<acp_v2::PlanEntry> {
+        let event = self.0.next().await;
+        if let Some(Ok(ThreadEvent::Plan(entries))) = event {
+            entries
+        } else {
+            panic!("Expected Plan but got: {:?}", event);
         }
     }
 

@@ -186,6 +186,9 @@ impl From<&Skill> for NativeAvailableSkill {
 
 pub const COMPACT_COMMAND_NAME: &str = "compact";
 
+/// The id of the plan `update_plan` keeps; each update replaces the plan under it.
+const SANDS_PLAN_ID: &str = "sands-plan";
+
 /// Returns the set of MCP prompt names that must be server-qualified
 /// (`/<server>.<name>`) to stay unambiguous in the slash-command popup: names
 /// shared by more than one MCP prompt, or names colliding with a reserved
@@ -2916,6 +2919,15 @@ impl NativeAgentConnection {
                             ThreadEvent::ContextCompaction(compaction) => {
                                 acp_thread.update(cx, |thread, cx| {
                                     thread.push_context_compaction(compaction, cx);
+                                })?;
+                            }
+                            ThreadEvent::Plan(entries) => {
+                                acp_thread.update(cx, |thread, cx| {
+                                    thread.upsert_plan_items(
+                                        acp_v2::PlanItems::new(SANDS_PLAN_ID, entries),
+                                        None,
+                                        cx,
+                                    )
                                 })?;
                             }
                             ThreadEvent::ContextCompactionUpdate(update) => {

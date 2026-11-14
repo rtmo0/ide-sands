@@ -4977,6 +4977,13 @@ impl ThreadView {
                                     .text_xs()
                                     .text_color(cx.theme().colors().text_muted)
                                     .child(icon)
+                                    .when_some(plan_entry_role(&entry.source), |this, role| {
+                                        this.child(
+                                            Label::new(role)
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Accent),
+                                        )
+                                    })
                                     .child(MarkdownElement::new(
                                         entry.content.clone(),
                                         plan_label_markdown_style(&entry.source.status, window, cx),
@@ -15568,4 +15575,14 @@ pub(crate) fn reset_fast_mode_warnings(cx: &mut App) {
             .log_err();
     })
     .detach();
+}
+
+/// The role of the subagent a plan step went to, as the native agent's `update_plan` records it.
+fn plan_entry_role(entry: &acp_v2::PlanEntry) -> Option<SharedString> {
+    entry
+        .meta
+        .as_ref()?
+        .get(agent::PLAN_ROLE_META_KEY)?
+        .as_str()
+        .map(|role| SharedString::from(role.to_string()))
 }
