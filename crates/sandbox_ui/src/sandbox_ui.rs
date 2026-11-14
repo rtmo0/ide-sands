@@ -38,6 +38,7 @@ mod design;
 mod gateway;
 mod kubernetes_panel;
 mod kubernetes_view;
+mod models_page;
 mod new_project_modal;
 mod projects_panel;
 mod provisioning;

@@ -647,6 +647,18 @@ pub fn revert_script(root: &str, changes: &[FileChange]) -> Result<String> {
     Ok(script)
 }
 
+/// Writes `content` to `path` under `.sands` in the repository at `root` inside the sandbox.
+pub async fn write(sbx: &Sbx, sandbox: &str, root: &str, path: &str, content: &str) -> Result<()> {
+    let change = FileChange {
+        path: path.to_string(),
+        before: Some(FileState::from_text(content)),
+        after: None,
+    };
+    // Reverting a change whose "before" is the new content writes exactly that content, with the
+    // same checks that keep the path inside `.sands`.
+    revert(sbx, sandbox, root, &[change]).await
+}
+
 pub async fn revert(sbx: &Sbx, sandbox: &str, root: &str, changes: &[FileChange]) -> Result<()> {
     let script = revert_script(root, changes)?;
     let output = sbx.exec(sandbox, &["bash", "-c", script.as_str()]).await?;

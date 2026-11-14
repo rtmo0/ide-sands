@@ -21,6 +21,25 @@ struct GatewayState {
     gateway: Gateway,
     /// The token of each open project, for this run of Sands.
     tokens: HashMap<String, String>,
+    /// Which providers have a key on the host, by project, for the Models page.
+    keys: HashMap<String, HostKeys>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HostKeys {
+    pub anthropic: bool,
+    pub openai: bool,
+}
+
+/// The gateway's port and the keys it adds for `sandbox`, or `None` when the gateway is off.
+pub(crate) fn status(sandbox: &str, cx: &App) -> Option<(u16, Option<HostKeys>)> {
+    let state = cx.try_global::<GatewayState>()?;
+    Some((state.gateway.port(), state.keys.get(sandbox).copied()))
+}
+
+/// Where a project's model calls are logged.
+pub(crate) fn calls_log(project: &str) -> std::path::PathBuf {
+    calls_path(project)
 }
 
 impl Global for GatewayState {}
@@ -56,6 +75,7 @@ pub(crate) fn init(cx: &mut App) {
         Ok(gateway) => cx.set_global(GatewayState {
             gateway,
             tokens: HashMap::new(),
+            keys: HashMap::new(),
         }),
         Err(error) => {
             log::error!("the model gateway is off: {error:#}");
@@ -112,7 +132,7 @@ async fn host_key(
 }
 
 /// Registers the project with the gateway and points its sandbox at it.
-fn connect(sandbox: String, cx: &mut App) {
+pub(crate) fn connect(sandbox: String, cx: &mut App) {
     let credentials = sands_credentials_provider::global(cx);
     cx.spawn(async move |cx| {
         let snapshot = {
@@ -128,6 +148,10 @@ fn connect(sandbox: String, cx: &mut App) {
         if let Some(key) = host_key(OPEN_AI_API_URL, "OPENAI_API_KEY", &credentials, cx).await {
             keys.insert(Provider::OpenAi, key);
         }
+        let host_keys = HostKeys {
+            anthropic: keys.contains_key(&Provider::Anthropic),
+            openai: keys.contains_key(&Provider::OpenAi),
+        };
         let route = Route {
             project: sandbox.clone(),
             allowed_models: allowed_models(&snapshot),
@@ -145,6 +169,7 @@ fn connect(sandbox: String, cx: &mut App) {
                     };
                     let base_url = state.gateway.base_url(&token, Provider::Anthropic);
                     state.tokens.insert(sandbox.clone(), token);
+                    state.keys.insert(sandbox.clone(), host_keys);
                     (base_url, state.gateway.port())
                 })
             })

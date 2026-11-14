@@ -23,6 +23,7 @@ use crate::{
         Meter, Tone, badge, caption, icon_button, key_value, primary_button, section_header,
         status_dot,
     },
+    models_page::ModelsPage,
     new_project_modal::agent_icon,
     sbx_problem::{Problem, ProblemFixed, SbxProblemView, problem_view},
 };
@@ -87,6 +88,7 @@ enum PanelState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PanelPage {
     Overview,
+    Models,
     Traffic,
     Settings,
 }
@@ -100,6 +102,7 @@ pub struct SandboxPanel {
     state: PanelState,
     active: bool,
     page: PanelPage,
+    models_page: Entity<ModelsPage>,
     port_input: Entity<InputField>,
     network_resource_input: Entity<InputField>,
     repository_url_input: Entity<InputField>,
@@ -127,6 +130,7 @@ impl SandboxPanel {
                     InputField::new(window, cx, "https://github.com/owner/repository.git")
                         .label("Git repository URL")
                 });
+                let models_page = cx.new(|_| ModelsPage::new(workspace_handle.clone()));
                 let mut panel = Self {
                     workspace: workspace_handle,
                     focus_handle: cx.focus_handle(),
@@ -139,6 +143,7 @@ impl SandboxPanel {
                         .unwrap_or(PanelState::Loading),
                     active: false,
                     page: PanelPage::Overview,
+                    models_page,
                     port_input,
                     network_resource_input,
                     repository_url_input,
@@ -430,6 +435,7 @@ impl SandboxPanel {
         let colors = cx.theme().colors();
         let tabs = [
             (PanelPage::Overview, "Overview"),
+            (PanelPage::Models, "Models"),
             (PanelPage::Traffic, "Network"),
             (PanelPage::Settings, "Settings"),
         ];
@@ -459,6 +465,10 @@ impl SandboxPanel {
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.page = page;
+                        if page == PanelPage::Models {
+                            this.models_page
+                                .update(cx, |models_page, cx| models_page.reload(cx));
+                        }
                         cx.notify();
                     }))
             }))
@@ -486,6 +496,7 @@ impl SandboxPanel {
         };
         let content = match self.page {
             PanelPage::Overview => self.render_overview(snapshot, cx),
+            PanelPage::Models => self.models_page.clone().into_any_element(),
             PanelPage::Traffic => self.render_traffic(snapshot, cx),
             PanelPage::Settings => self.render_settings(snapshot, cx),
         };
